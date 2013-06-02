@@ -12,7 +12,9 @@
     "systemXHR":{},
     "settings":{ "access": "readwrite" },
     "device-storage:pictures":{ "access": "readonly" },
-    "open-remote-window":{}
+    "open-remote-window":{},
+    "storage":{},
+    "geolocation": {}
   },
   "locales": {
     "ar": {
@@ -33,6 +35,9 @@
     }
   },
   "default_locale": "en-US",
+  "icons": {
+    "30": "/style/icons/HomeScreen.png"
+  },
   "orientation": "portrait-primary",
   "activities": {
     "save-bookmark": {

@@ -2676,7 +2676,7 @@ ICAL.Binary = (function() {
       if (aData instanceof ICAL.Component) {
         this.component = aData;
         this.tzid = this.component.getFirstPropertyValue('tzid');
-        return;
+        return null;
       }
 
       for (var key in OPTIONS) {
@@ -2729,7 +2729,6 @@ ICAL.Binary = (function() {
 
       // TODO: replace with bin search?
       for (;;) {
-        //console.log(change_num, change_num_to_use);
         var change = ICAL.helpers.clone(this.changes[change_num], true);
         if (change.utcOffset < change.prevUtcOffset) {
           ICAL.helpers.dumpn("Adjusting " + change.utcOffset);
@@ -2879,21 +2878,23 @@ ICAL.Binary = (function() {
         var props = aComponent.getAllProperties("rdate");
         for (var rdatekey in props) {
           var rdate = props[rdatekey];
+          var time = rdate.getFirstValue();
           var change = init_changes();
-          change.year = rdate.time.year;
-          change.month = rdate.time.month;
-          change.day = rdate.time.day;
 
-          if (rdate.time.isDate) {
+          change.year = time.year;
+          change.month = time.month;
+          change.day = time.day;
+
+          if (time.isDate) {
             change.hour = dtstart.hour;
             change.minute = dtstart.minute;
             change.second = dtstart.second;
           } else {
-            change.hour = rdate.time.hour;
-            change.minute = rdate.time.minute;
-            change.second = rdate.time.second;
+            change.hour = time.hour;
+            change.minute = time.minute;
+            change.second = time.second;
 
-            if (rdate.time.zone == ICAL.Timezone.utcTimezone) {
+            if (time.zone == ICAL.Timezone.utcTimezone) {
               ICAL.Timezone.adjust_change(change, 0, 0, 0,
                                               -change.prevUtcOffset);
             }
@@ -2902,36 +2903,38 @@ ICAL.Binary = (function() {
           changes.push(change);
         }
 
-        var rrule = aComponent.getFirstProperty("rrule").getFirstValue();
-        // TODO multiple rrules?
+        var rrule = aComponent.getFirstProperty("rrule");
 
-        var change = init_changes();
-
-        if (rrule.until && rrule.until.zone == ICAL.Timezone.utcTimezone) {
-          rrule.until.adjust(0, 0, 0, change.prevUtcOffset);
-          rrule.until.zone = ICAL.Timezone.localTimezone;
-        }
-
-        var iterator = rrule.iterator(dtstart);
-
-        var occ;
-        while ((occ = iterator.next())) {
+        if (rrule) {
+          rrule = rrule.getFirstValue();
           var change = init_changes();
-          if (occ.year > aYear || !occ) {
-            break;
+
+          if (rrule.until && rrule.until.zone == ICAL.Timezone.utcTimezone) {
+            rrule.until.adjust(0, 0, 0, change.prevUtcOffset);
+            rrule.until.zone = ICAL.Timezone.localTimezone;
           }
 
-          change.year = occ.year;
-          change.month = occ.month;
-          change.day = occ.day;
-          change.hour = occ.hour;
-          change.minute = occ.minute;
-          change.second = occ.second;
-          change.isDate = occ.isDate;
+          var iterator = rrule.iterator(dtstart);
 
-          ICAL.Timezone.adjust_change(change, 0, 0, 0,
-                                          -change.prevUtcOffset);
-          changes.push(change);
+          var occ;
+          while ((occ = iterator.next())) {
+            var change = init_changes();
+            if (occ.year > aYear || !occ) {
+              break;
+            }
+
+            change.year = occ.year;
+            change.month = occ.month;
+            change.day = occ.day;
+            change.hour = occ.hour;
+            change.minute = occ.minute;
+            change.second = occ.second;
+            change.isDate = occ.isDate;
+
+            ICAL.Timezone.adjust_change(change, 0, 0, 0,
+                                            -change.prevUtcOffset);
+            changes.push(change);
+          }
         }
       }
 
@@ -3480,16 +3483,37 @@ ICAL.TimezoneService = (function() {
     addDuration: function icaltime_add(aDuration) {
       var mult = (aDuration.isNegative ? -1 : 1);
 
-      this.second += mult * aDuration.seconds;
-      this.minute += mult * aDuration.minutes;
-      this.hour += mult * aDuration.hours;
-      this.day += mult * aDuration.days;
-      this.day += mult * 7 * aDuration.weeks;
+      // because of the duration optimizations it is much
+      // more efficient to grab all the values up front
+      // then set them directly (which will avoid a normalization call).
+      // So we don't actually normalize until we need it.
+      var second = this.second;
+      var minute = this.minute;
+      var hour = this.hour;
+      var day = this.day;
+
+      second += mult * aDuration.seconds;
+      minute += mult * aDuration.minutes;
+      hour += mult * aDuration.hours;
+      day += mult * aDuration.days;
+      day += mult * 7 * aDuration.weeks;
+
+      this.second = second;
+      this.minute = minute;
+      this.hour = hour;
+      this.day = day;
     },
 
+    /**
+     * Subtract the date details (_excluding_ timezone).
+     * Useful for finding the relative difference between
+     * two time objects excluding their timezone differences.
+     *
+     * @return {ICAL.Duration} difference in duration.
+     */
     subtractDate: function icaltime_subtract(aDate) {
-      var unixTime = this.toUnixTime();
-      var other = aDate.toUnixTime();
+      var unixTime = this.toUnixTime() + this.utcOffset();
+      var other = aDate.toUnixTime() + aDate.utcOffset();
       var diff = (unixTime - other);
 
       return ICAL.Duration.fromSeconds(
@@ -3585,13 +3609,6 @@ ICAL.TimezoneService = (function() {
         }
       } else {
         return new Date(this.toUnixTime() * 1000);
-        var utcDate = this.convertToZone(ICAL.Timezone.utcTimezone);
-        if (this.isDate) {
-          return Date.UTC(this.year, this.month - 1, this.day);
-        } else {
-          return Date.UTC(this.year, this.month - 1, this.day,
-                          this.hour, this.minute, this.second, 0);
-        }
       }
     },
 
@@ -3694,10 +3711,16 @@ ICAL.TimezoneService = (function() {
     },
 
     fromUnixTime: function fromUnixTime(seconds) {
+      this.zone = ICAL.Timezone.utcTimezone;
       var epoch = ICAL.Time.epochTime.clone();
       epoch.adjust(0, 0, 0, seconds);
-      this.fromData(epoch);
-      this.zone = ICAL.Timezone.utcTimezone;
+
+      this.year = epoch.year;
+      this.month = epoch.month;
+      this.day = epoch.day;
+      this.hour = epoch.hour;
+      this.minute = epoch.minute;
+      this.second = epoch.second;
     },
 
     toUnixTime: function toUnixTime() {
@@ -4124,7 +4147,7 @@ ICAL.TimezoneService = (function() {
       if (this.count) {
         str += ";COUNT=" + this.count;
       }
-      if (this.interval != 1) {
+      if (this.interval > 1) {
         str += ";INTERVAL=" + this.interval;
       }
       for (var k in this.parts) {
@@ -4178,6 +4201,19 @@ ICAL.TimezoneService = (function() {
     return DOW_MAP[string];
   };
 
+  /**
+   * Convert a numeric day value into its ical representation (SU, MO, etc..)
+   *
+   * @param {Numeric} numeric value of given day.
+   * @return {String} day ical day.
+   */
+  ICAL.Recur.numericDayToIcalDay = function toIcalDay(num) {
+    //XXX: this is here so we can deal with possibly invalid number values.
+    //     Also, this allows consistent mapping between day numbers and day
+    //     names for external users.
+    return REVERSE_DOW_MAP[num];
+  };
+
   var VALID_DAY_NAMES = /^(SU|MO|TU|WE|TH|FR|SA)$/;
   var VALID_BYDAY_PART = /^([+-])?(5[0-3]|[1-4][0-9]|[1-9])?(SU|MO|TU|WE|TH|FR|SA)$/
   var ALLOWED_FREQ = ['SECONDLY', 'MINUTELY', 'HOURLY',
@@ -4203,6 +4239,11 @@ ICAL.TimezoneService = (function() {
 
     INTERVAL: function(value, dict) {
       dict.interval = ICAL.helpers.strictParseInt(value);
+      if (dict.interval < 1) {
+        // 0 or negative values are not allowed, some engines seem to generate
+        // it though. Assume 1 instead.
+        dict.interval = 1;
+      }
     },
 
     UNTIL: function(value, dict) {
@@ -4412,8 +4453,8 @@ ICAL.RecurIterator = (function() {
             this.last.day += dow;
           }
         } else {
-          var wkMap = icalrecur_iterator._wkdayMap[this.dtstart.dayOfWeek()];
-          parts.BYDAY = [wkMap];
+          var dayName = ICAL.Recur.numericDayToIcalDay(this.dtstart.dayOfWeek());
+          parts.BYDAY = [dayName];
         }
       }
 
@@ -5411,7 +5452,7 @@ ICAL.RecurIterator = (function() {
       return (this.check_contract_restriction("BYSECOND", this.last.second) &&
               this.check_contract_restriction("BYMINUTE", this.last.minute) &&
               this.check_contract_restriction("BYHOUR", this.last.hour) &&
-              this.check_contract_restriction("BYDAY", icalrecur_iterator._wkdayMap[dow]) &&
+              this.check_contract_restriction("BYDAY", ICAL.Recur.numericDayToIcalDay(dow)) &&
               this.check_contract_restriction("BYWEEKNO", weekNo) &&
               this.check_contract_restriction("BYMONTHDAY", this.last.day) &&
               this.check_contract_restriction("BYMONTH", this.last.month) &&
@@ -5454,8 +5495,6 @@ ICAL.RecurIterator = (function() {
     }
 
   };
-
-  icalrecur_iterator._wkdayMap = ["", "SU", "MO", "TU", "WE", "TH", "FR", "SA"];
 
   icalrecur_iterator._indexMap = {
     "BYSECOND": 0,
@@ -5925,6 +5964,12 @@ ICAL.RecurExpansion = (function() {
 }());
 ICAL.Event = (function() {
 
+  function compareRangeException(a, b) {
+    if (a[0] > b[0]) return 1;
+    if (b[0] > a[0]) return -1;
+    return 0;
+  }
+
   function Event(component, options) {
     if (!(component instanceof ICAL.Component)) {
       options = component;
@@ -5937,7 +5982,9 @@ ICAL.Event = (function() {
       this.component = new ICAL.Component('vevent');
     }
 
+    this._rangeExceptionCache = Object.create(null);
     this.exceptions = Object.create(null);
+    this.rangeExceptions = [];
 
     if (options && options.strictExceptions) {
       this.strictExceptions = options.strictExceptions;
@@ -5949,6 +5996,8 @@ ICAL.Event = (function() {
   }
 
   Event.prototype = {
+
+    THISANDFUTURE: 'THISANDFUTURE',
 
     /**
      * List of related event exceptions.
@@ -5988,9 +6037,74 @@ ICAL.Event = (function() {
         throw new Error('attempted to relate unrelated exception');
       }
 
+      var id = obj.recurrenceId.toString();
+
       // we don't sort or manage exceptions directly
       // here the recurrence expander handles that.
-      this.exceptions[obj.recurrenceId.toString()] = obj;
+      this.exceptions[id] = obj;
+
+      // index RANGE=THISANDFUTURE exceptions so we can
+      // look them up later in getOccurrenceDetails.
+      if (obj.modifiesFuture()) {
+        var item = [
+          obj.recurrenceId.toUnixTime(), id
+        ];
+
+        // we keep them sorted so we can find the nearest
+        // value later on...
+        var idx = ICAL.helpers.binsearchInsert(
+          this.rangeExceptions,
+          item,
+          compareRangeException
+        );
+
+        this.rangeExceptions.splice(idx, 0, item);
+      }
+    },
+
+    /**
+     * If this record is an exception and has the RANGE=THISANDFUTURE value.
+     *
+     * @return {Boolean} true when is exception with range.
+     */
+    modifiesFuture: function() {
+      var range = this.component.getFirstPropertyValue('range');
+      return range === this.THISANDFUTURE;
+    },
+
+    /**
+     * Finds the range exception nearest to the given date.
+     *
+     * @param {ICAL.Time} time usually an occurrence time of an event.
+     * @return {ICAL.Event|Null} the related event/exception or null.
+     */
+    findRangeException: function(time) {
+      if (!this.rangeExceptions.length) {
+        return null;
+      }
+
+      var utc = time.toUnixTime();
+      var idx = ICAL.helpers.binsearchInsert(
+        this.rangeExceptions,
+        [utc],
+        compareRangeException
+      );
+
+      idx -= 1;
+
+      // occurs before
+      if (idx < 0) {
+        return null;
+      }
+
+      var rangeItem = this.rangeExceptions[idx];
+
+      // sanity check
+      if (utc < rangeItem[0]) {
+        return null;
+      }
+
+      return rangeItem[1];
     },
 
     /**
@@ -6016,12 +6130,52 @@ ICAL.Event = (function() {
         result.endDate = item.endDate;
         result.item = item;
       } else {
-        var end = occurrence.clone();
-        end.addDuration(this.duration);
+        // range exceptions (RANGE=THISANDFUTURE) have a
+        // lower priority then direct exceptions but
+        // must be accounted for first. Their item is
+        // always the first exception with the range prop.
+        var rangeExceptionId = this.findRangeException(
+          occurrence
+        );
 
-        result.endDate = end;
-        result.startDate = occurrence;
-        result.item = this;
+        if (rangeExceptionId) {
+          var exception = this.exceptions[rangeExceptionId];
+
+          // range exception must modify standard time
+          // by the difference (if any) in start/end times.
+          result.item = exception;
+
+          var startDiff = this._rangeExceptionCache[rangeExceptionId];
+
+          if (!startDiff) {
+            var original = exception.recurrenceId.clone();
+            var newStart = exception.startDate.clone();
+
+            // zones must be same otherwise subtract may be incorrect.
+            original.zone = newStart.zone;
+            var startDiff = newStart.subtractDate(original);
+
+            this._rangeExceptionCache[rangeExceptionId] = startDiff;
+          }
+
+          var start = occurrence.clone();
+          start.zone = exception.startDate.zone;
+          start.addDuration(startDiff);
+
+          var end = start.clone();
+          end.addDuration(exception.duration);
+
+          result.startDate = start;
+          result.endDate = end;
+        } else {
+          // no range exception standard expansion
+          var end = occurrence.clone();
+          end.addDuration(this.duration);
+
+          result.endDate = end;
+          result.startDate = occurrence;
+          result.item = this;
+        }
       }
 
       return result;
@@ -6090,7 +6244,7 @@ ICAL.Event = (function() {
     },
 
     set startDate(value) {
-      this._setProp('dtstart', value);
+      this._setTime('dtstart', value);
     },
 
     get endDate() {
@@ -6098,19 +6252,11 @@ ICAL.Event = (function() {
     },
 
     set endDate(value) {
-      this._setProp('dtend', value);
+      this._setTime('dtend', value);
     },
 
     get duration() {
-      // cached because its dynamically calculated
-      // and may be frequently used. This could be problematic
-      // later if we modify the underlying start/endDate.
-      //
-      // When do add that functionality it should expire this cache...
-      if (typeof(this._duration) === 'undefined') {
-        this._duration = this.endDate.subtractDate(this.startDate);
-      }
-      return this._duration;
+      return this.endDate.subtractDate(this.startDate);
     },
 
     get location() {
@@ -6165,6 +6311,49 @@ ICAL.Event = (function() {
 
     set recurrenceId(value) {
       this._setProp('recurrence-id', value);
+    },
+
+    /**
+     * set/update a time property's value.
+     * This will also update the TZID of the property.
+     *
+     * TODO: this method handles the case where we are switching
+     * from a known timezone to an implied timezone (one without TZID).
+     * This does _not_ handle the case of moving between a known
+     *  (by TimezoneService) timezone to an unknown timezone...
+     *
+     * We will not add/remove/update the VTIMEZONE subcomponents
+     *  leading to invalid ICAL data...
+     */
+    _setTime: function(propName, time) {
+      var prop = this.component.getFirstProperty(propName);
+
+      if (!prop) {
+        prop = new ICAL.Property(propName);
+        this.component.addProperty(prop);
+      }
+
+      // type conversion
+      if (time.isDate && prop.type !== 'date') {
+        prop.resetType('date');
+      }
+
+      if (!time.isDate && prop.type !== 'date-time') {
+        prop.resetType('date-time');
+      }
+
+      // utc and local don't get a tzid
+      if (
+        time.zone === ICAL.Timezone.localTimezone ||
+        time.zone === ICAL.Timezone.utcTimezone
+      ) {
+        // remove the tzid
+        prop.removeParameter('tzid');
+      } else {
+        prop.setParameter('tzid', time.zone.tzid);
+      }
+
+      prop.setValue(time);
     },
 
     _setProp: function(name, value) {

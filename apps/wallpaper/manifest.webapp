@@ -12,7 +12,7 @@
   "activities": {
     "pick": {
       "filters": {
-        "type": ["image/jpeg", "image/png"],
+        "type": ["image/*", "image/jpeg"],
         "width": 320,
         "height": 480
        },
@@ -32,5 +32,12 @@
   },
   "icons": {
     "64": "/style/icons/64/Wallpaper.png"
-  }
+  },
+  "locales": {
+    "en-US": {
+      "name": "Wallpaper",
+      "description": "Gaia Wallpaper Picker"
+    }
+  },
+  "default_locale": "en-US"
 }

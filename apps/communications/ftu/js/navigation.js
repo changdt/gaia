@@ -25,15 +25,20 @@ var steps = {
   },
   5: {
     onlyForward: false,
-    hash: '#import_contacts',
+    hash: '#geolocation',
     requireSIM: false
   },
   6: {
     onlyForward: false,
-    hash: '#welcome_browser',
+    hash: '#import_contacts',
     requireSIM: false
   },
   7: {
+    onlyForward: false,
+    hash: '#welcome_browser',
+    requireSIM: false
+  },
+  8: {
     onlyForward: false,
     hash: '#browser_privacy',
     requireSIM: false
@@ -42,12 +47,15 @@ var steps = {
 
 // Retrieve number of steps for navigation
 var numSteps = Object.keys(steps).length;
+var _;
 
 var Navigation = {
   currentStep: 1,
+  previousStep: 1,
   externalUrlLoaderSelector: '#external-url-loader',
 
   init: function n_init() {
+    _ = navigator.mozL10n.get;
     var forward = document.getElementById('forward');
     var back = document.getElementById('back');
     forward.addEventListener('click', this.forward.bind(this));
@@ -68,6 +76,15 @@ var Navigation = {
     // this will be called by setTimeout, so it's easier if it's already bound
     this.backFromIframe = this.backFromIframe.bind(this);
   },
+
+  backFromIframe: function n_backFromIframe() {
+    if (window.location.hash === this.externalUrlLoaderSelector) {
+      window.history.back();
+      // iframes are modifying history as well
+      setTimeout(this.backFromIframe, 0);
+    }
+  },
+
   back: function n_back(event) {
     var currentStep = steps[this.currentStep];
     var actualHash = window.location.hash;
@@ -81,45 +98,35 @@ var Navigation = {
     } else {
       var self = this;
       var goToStep = function() {
+        self.previousStep = self.currentStep;
         self.currentStep--;
         if (self.currentStep > 0) {
-          var followingStep = steps[self.currentStep];
-          if (followingStep.requireSIM && !SimManager.unlocked) {
-            goToStep();
-          } else {
-            self.manageStep();
-          }
+          self.manageStep();
         }
       };
       goToStep();
     }
   },
 
-  backFromIframe: function n_backFromIframe() {
-    if (window.location.hash === this.externalUrlLoaderSelector) {
-      window.history.back();
-
-      // iframes are modifying history as well
-      setTimeout(this.backFromIframe, 0);
-    }
-  },
-
   forward: function n_forward(event) {
     var self = this;
     var goToStepForward = function() {
+      self.previousStep = self.currentStep;
       self.currentStep++;
       if (self.currentStep > numSteps) {
-        UIManager.activationScreen.classList.remove('show');
-        UIManager.finishScreen.classList.add('show');
-        Tutorial.init();
+        // Try to send Newsletter here
+        UIManager.sendNewsletter(function newsletterSent(result) {
+          if (result) { // sending process ok, we advance
+            UIManager.activationScreen.classList.remove('show');
+            UIManager.finishScreen.classList.add('show');
+            Tutorial.init();
+          } else { // error on sending, we stay where we are
+            self.currentStep--;
+          }
+        });
         return;
       }
-      var followingStep = steps[self.currentStep];
-      if (followingStep.requireSIM && !SimManager.unlocked) {
-        goToStepForward();
-      } else {
-        self.manageStep();
-      }
+      self.manageStep();
     };
     goToStepForward();
   },
@@ -151,83 +158,142 @@ var Navigation = {
     }
   },
 
+  getProgressBarClassName: function n_getProgressBarClassName() {
+    // Manage step state (dynamically change)
+    var className = 'step-state step-';
+    if (this.skipped && this.currentStep > 2) {
+      className += (this.currentStep - 1) + ' less-steps';
+    } else {
+      className += this.currentStep;
+    }
 
+    return className;
+  },
 
   handleEvent: function n_handleEvent(event) {
     var actualHash = window.location.hash;
+    var className = this.getProgressBarClassName();
 
     switch (actualHash) {
       case '#languages':
-        UIManager.progressBar.className = 'step-state step-1';
         UIManager.mainTitle.innerHTML = _('language');
-        // Hide refresh button in case we end up here coming back from wifi
-        UIManager.activationScreen.classList.add('no-options');
         break;
       case '#data_3g':
-        UIManager.progressBar.className = 'step-state step-2';
         UIManager.mainTitle.innerHTML = _('3g');
         DataMobile.
           getStatus(UIManager.updateDataConnectionStatus.bind(UIManager));
-        UIManager.activationScreen.classList.add('no-options');
         break;
       case '#wifi':
-        UIManager.progressBar.className = 'step-state step-3';
-        UIManager.mainTitle.innerHTML = _('wifi');
+        UIManager.mainTitle.innerHTML = _('selectNetwork');
         UIManager.activationScreen.classList.remove('no-options');
         if (UIManager.navBar.classList.contains('secondary-menu')) {
           UIManager.navBar.classList.remove('secondary-menu');
           return;
         }
         // Avoid refresh when connecting
-        WifiManager.scan(UIManager.renderNetworks);
+        WifiManager.scan(WifiUI.renderNetworks);
+        break;
+      case '#geolocation':
+        UIManager.mainTitle.innerHTML = _('geolocation');
         break;
       case '#date_and_time':
-        UIManager.progressBar.className = 'step-state step-4';
         UIManager.mainTitle.innerHTML = _('dateAndTime');
-        UIManager.activationScreen.classList.add('no-options');
         break;
       case '#import_contacts':
-        UIManager.progressBar.className = 'step-state step-5';
-        UIManager.mainTitle.innerHTML = _('importContacts2');
-        var fbOption = document.getElementById('fb_import');
-        var simOption = document.getElementById('sim-import-button');
-        // If there is an unlocked SIM we activate import from SIM
-        if (AppManager.thereIsSIM && SimManager.unlocked) {
-          simOption.classList.remove('disabled');
-        } else {
-          simOption.classList.add('disabled');
-        }
+        UIManager.mainTitle.innerHTML = _('importContacts3');
+        // Enabling or disabling SIM import depending on card status
+        SimManager.checkSIMButton();
+
+        // Enabling or disabling SD import depending on card status
+        SdManager.checkSDButton();
+
         // If we have 3G or Wifi activate FB import
-        if (WifiManager.isConnected || DataMobile.isDataAvailable) {
-          fbOption.classList.remove('disabled');
-        } else {
-          fbOption.classList.add('disabled');
+        var fbState;
+        if (!WifiManager.api) {
+          // Desktop
+          ImportIntegration.checkImport('enabled');
+          return;
         }
+
+        fbState = window.navigator.onLine ? 'enabled' : 'disabled';
+        ImportIntegration.checkImport(fbState);
         break;
       case '#welcome_browser':
-        UIManager.progressBar.className = 'step-state step-6';
-        UIManager.mainTitle.innerHTML = _('browserPrivacyChoices');
+        UIManager.mainTitle.innerHTML = _('aboutBrowser');
+        break;
+      case '#browser_privacy':
+        UIManager.mainTitle.innerHTML = _('aboutBrowser');
         break;
       case '#about-your-rights':
       case '#about-your-privacy':
       case '#sharing-performance-data':
-        UIManager.mainTitle.innerHTML = _('browserPrivacyChoices');
+        UIManager.mainTitle.innerHTML = _('aboutBrowser');
       case this.externalUrlLoaderSelector:
-        UIManager.progressBar.className = 'hidden';
+        // override the className here
+        className = 'hidden';
         UIManager.navBar.classList.add('back-only');
         break;
     }
 
-    if (steps[this.currentStep].hash === actualHash) {
+    UIManager.progressBar.className = className;
+
+    // Managing options button
+    if (this.currentStep != 3) { //wifi
+      UIManager.activationScreen.classList.add('no-options');
+    }
+
+    // Managing nav buttons when coming back from out-of-steps (privacy)
+    if (this.currentStep <= numSteps &&
+        steps[this.currentStep].hash === actualHash) {
       UIManager.navBar.classList.remove('back-only');
     }
   },
-  manageStep: function manageStep() {
+
+  skipStep: function n_skipStep() {
+    this.currentStep = this.currentStep +
+                      (this.currentStep - this.previousStep);
+    if (this.currentStep < 1) {
+      this.previousStep = this.currentStep = 1;
+    }
+    if (this.currentStep > numSteps) {
+      this.previousStep = this.currentStep = numSteps;
+    }
+    this.skipped = true;
+    this.manageStep();
+  },
+
+  manageStep: function n_manageStep() {
+    var self = this;
+    // Retrieve future location
+    var futureLocation = steps[self.currentStep];
+    // There is some locations which need a 'loading'
+    if (futureLocation.hash === '#wifi') {
+      utils.overlay.show(_('scanningNetworks'), 'spinner');
+    }
+    // Navigation bar management
     if (steps[this.currentStep].onlyForward) {
       UIManager.navBar.classList.add('forward-only');
     } else {
       UIManager.navBar.classList.remove('forward-only');
     }
-    window.location.hash = steps[this.currentStep].hash;
+    // Substitute button content on last step
+    var nextButton = document.getElementById('forward');
+    if (this.currentStep === numSteps) {
+      nextButton.firstChild.textContent = _('done');
+    } else {
+      nextButton.firstChild.textContent = _('navbar-next');
+    }
+    // Change hash to the right location
+    window.location.hash = futureLocation.hash;
+    // SIM card management
+    if (futureLocation.requireSIM) {
+      SimManager.handleCardState(function check_cardState(response) {
+        self.skipped = false;
+        if (!response) {
+          self.skipStep();
+        }
+      });
+    }
   }
 };
+

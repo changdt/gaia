@@ -4,6 +4,7 @@ var fb = this.fb || {};
 fb.CATEGORY = 'facebook';
 fb.NOT_LINKED = 'not_linked';
 fb.LINKED = 'fb_linked';
+fb.PROPAGATED_PREFIX = 'fb_propagated_';
 
 // Types of URLs for FB Information
 fb.PROFILE_PHOTO_URI = 'fb_profile_photo';
@@ -24,6 +25,24 @@ fb.isFbLinked = function(devContact) {
                         devContact.category.indexOf(fb.LINKED) !== -1);
 };
 
+fb.isPropagated = function fcu_isPropagated(field, devContact) {
+  return (devContact.category && devContact.category.
+                                  indexOf(fb.PROPAGATED_PREFIX + field) !== -1);
+};
+
+fb.removePropagatedFlag = function fcu_removePropagatedFlag(field, devContact) {
+  var idx = devContact.category.indexOf(fb.PROPAGATED_PREFIX + field);
+  if (idx !== -1) {
+    devContact.category.splice(idx, 1);
+  }
+};
+
+fb.setPropagatedFlag = function fcu_setPropagatedFlag(field, devContact) {
+  var idx = devContact.category.indexOf(fb.PROPAGATED_PREFIX + field);
+  if (idx === -1) {
+    devContact.category.push(fb.PROPAGATED_PREFIX + field);
+  }
+};
 
 fb.getFriendUid = function(devContact) {
   var out = devContact.uid;
@@ -127,11 +146,14 @@ fb.friend2mozContact = function(f) {
 
   if (Array.isArray(f.phones) && f.phones.length > 0) {
     f.tel = [];
+    f.shortTelephone = [];
     f.phones.forEach(function(aphone) {
       f.tel.push({
         type: [privateType],
         value: normalizeFbPhoneNumber(aphone)
       });
+      // Enabling to find FB phones by short number
+      f.shortTelephone.push(aphone.number);
     });
   }
 
@@ -177,11 +199,11 @@ fb.getBirthDate = function getBirthDate(sbday) {
 
   var syear = sbday.substring(iyear + 1, sbday.length);
 
-  out.setDate(parseInt(sday));
-  out.setMonth(parseInt(smonth) - 1, parseInt(sday));
+  out.setDate(parseInt(sday, 10));
+  out.setMonth(parseInt(smonth, 10) - 1, parseInt(sday, 10));
 
   if (syear && syear.length > 0) {
-    out.setYear(parseInt(syear));
+    out.setYear(parseInt(syear, 10));
   }
 
   return out;
@@ -325,7 +347,7 @@ fb.utils.Request = function() {
         this.onsuccess(ev);
       }.bind(this), 0);
     }
-  }
+  };
 
   this.failed = function(error) {
     this.error = error;
@@ -336,5 +358,5 @@ fb.utils.Request = function() {
         this.onerror(ev);
       }.bind(this), 0);
     }
-  }
+  };
 };

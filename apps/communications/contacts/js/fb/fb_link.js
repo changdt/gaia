@@ -24,33 +24,30 @@ if (!fb.link) {
     // The uid of the friend to be linked
     var friendUidToLink;
 
-    var linkProposalElement = document.querySelector('#linkProposal');
-
     // Base query to search for contacts
     var SEARCH_QUERY = ['SELECT uid, name, email from user ',
-    ' WHERE uid IN (SELECT uid1 FROM friend WHERE uid2=me() ORDER BY rank) ',
+    ' WHERE uid IN (SELECT uid1 FROM friend WHERE uid2=me()) ',
     ' AND (', null, ')', ' ORDER BY name'
     ];
 
     // Conditions
     var MAIL_COND = ['strpos(email, ' , "'", null, "'", ') >= 0'];
     var CELL_COND = ['strpos(cell, ' , "'", null, "'", ') >= 0'];
-    var NAME_COND = ['strpos(lower(name), ' , "'", null,
-                                                              "'", ') >= 0'];
 
-    // Conditions over first name and last name (second query)
-    var FIRST_NAME_COND = ['strpos(lower(first_name), ' , "'", null,
-                                                              "'", ') >= 0'];
-    var LAST_NAME_COND = ['strpos(lower(last_name), ' , "'", null,
-                                                              "'", ') >= 0'];
+    var ALL_QUERY = ['SELECT uid, name, last_name, first_name,',
+      ' middle_name, email from user ',
+      ' WHERE uid IN (SELECT uid1 FROM friend WHERE uid2=me()) ',
+      ' ORDER BY name'
+    ];
 
-    var ALL_QUERY = ['SELECT uid, name, email from user ',
-    ' WHERE uid IN (SELECT uid1 FROM friend WHERE uid2=me()) ',
-    ' ORDER BY name'];
+    var SEARCH_ACCENTS_FIELDS = {
+      'last_name': 'familyName',
+      'first_name': 'givenName',
+      'middle_name': 'givenName'
+    };
 
     var friendsList;
-    var viewButton = document.querySelector('#view-all');
-    var mainSection = document.querySelector('#main');
+    var viewButton, mainSection;
 
     var currentRecommendation = null;
     var allFriends = null;
@@ -61,106 +58,74 @@ if (!fb.link) {
     var _ = navigator.mozL10n.get;
     var imgLoader;
 
+    // Only needed for testing purposes
+    var completedCb;
+
     // Builds the first query for finding a contact to be linked to
     function buildQuery(contact) {
       var filter = [];
 
-      if (contact.name && contact.name.length > 0 &&
-                                      contact.name[0].length > 0) {
-        // First the name condition is put there
-        NAME_COND[2] = contact.name[0].trim().toLowerCase();
-      }
-      else {
-         // The condition will be false by definition
-        NAME_COND[2] = 'A';
-      }
-
-      filter.push(NAME_COND.join(''));
-
       if (contact.tel && contact.tel.length > 0) {
         contact.tel.forEach(function(tel) {
-          filter.push(' OR ');
           CELL_COND[2] = tel.value.trim();
           filter.push(CELL_COND.join(''));
+          filter.push(' OR ');
         });
       }
 
       if (contact.email && contact.email.length > 0) {
         contact.email.forEach(function(email) {
-          filter.push(' OR ');
           MAIL_COND[2] = email.value.trim();
           filter.push(MAIL_COND.join(''));
+          filter.push(' OR ');
         });
       }
 
-      SEARCH_QUERY[3] = filter.join('');
+      // Remove the last OR
+      if (filter.length > 0) {
+        filter[filter.length - 1] = null;
+      }
+      var filterStr = filter.join('');
 
-      return SEARCH_QUERY.join('');
-    }
-
-    // Builds the second query (name-based) for findinding a linking contact
-    function buildQueryNames(contact) {
-      var filter = [];
-
-      if (contact.givenName && contact.givenName.length > 0 &&
-                               contact.givenName[0].length > 0) {
-        // First the name condition is put there
-        FIRST_NAME_COND[2] = contact.givenName[0].trim().toLowerCase();
+      var out;
+      if (filterStr) {
+        SEARCH_QUERY[3] = filterStr;
+        out = SEARCH_QUERY.join('');
       }
       else {
-         // The condition will be false by definition
-        FIRST_NAME_COND[2] = 'A';
+        out = null;
       }
-
-      filter.push(FIRST_NAME_COND.join(''));
-      filter.push(' OR ');
-
-      if (contact.familyName && contact.familyName.length > 0 &&
-                                contact.familyName[0].length > 0) {
-        // First the name condition is put there
-        LAST_NAME_COND[2] = contact.familyName[0].trim().toLowerCase();
-      }
-      else {
-         // The condition will be false by definition
-        LAST_NAME_COND[2] = 'A';
-      }
-
-      filter.push(LAST_NAME_COND.join(''));
-
-      SEARCH_QUERY[3] = filter.join('');
-
-      var out = SEARCH_QUERY.join('');
 
       return out;
     }
-
 
     // entry point for obtaining a remote proposal
     link.getRemoteProposal = function(acc_tk, contid) {
       var cid = contid || contactid;
 
       var req = fb.utils.getContactData(cid);
-
       req.onsuccess = function() {
         if (req.result) {
           cdata = req.result;
           numQueries = 1;
           currentRecommendation = null;
-          doGetRemoteProposal(acc_tk, cdata, buildQuery(cdata));
+          var query = buildQuery(cdata);
+          // Check whether we have enough info for the first query
+          // otherwise launch the getAll query
+          if (query === null) {
+            getRemoteProposalAll(acc_tk);
+            return;
+          }
+          doGetRemoteProposal(acc_tk, cdata, query);
         }
         else {
           throw ('FB: Contact to be linked not found: ', cid);
         }
-      }
+      };
       req.onerror = function() {
         throw ('FB: Error while retrieving contact data: ', cid);
-      }
-    }
-
-    function getRemoteProposalByNames(acc_tk, contact) {
-      numQueries++;
-      doGetRemoteProposal(acc_tk, cdata, buildQueryNames(contact));
-    }
+      };
+    };
 
     function getRemoteProposalAll(acc_tk) {
       numQueries++;
@@ -226,7 +191,7 @@ if (!fb.link) {
     // Obtains a linking proposal to be shown to the user
     link.getProposal = function(cid, acc_tk) {
       link.getRemoteProposal(acc_tk, cid);
-    }
+    };
 
     // Executed when the server response is available
     link.proposalReady = function(response) {
@@ -247,37 +212,147 @@ if (!fb.link) {
       }
 
       if (response.data.length === 0 && numQueries === 1) {
-        getRemoteProposalByNames(access_token, cdata);
-      } else if (response.data.length === 0 && numQueries === 2) {
         getRemoteProposalAll(access_token);
-      } else {
+      }
+      else {
         var data = response.data;
         currentRecommendation = data;
 
-        var numFriendsProposed = response.data.length;
+        var sortedByName = [];
+        var numFriendsProposed = data.length;
+        var searchAccentsArrays = {};
+        var index = 0;
+
         data.forEach(function(item) {
           if (!item.email) {
             item.email = '';
           }
+          var box = importUtils.getPreferredPictureBox();
+          item.picwidth = box.width;
+          item.picheight = box.height;
+
+          // Only do this if we need to prepare the search accents phase
+          if (numQueries === 2) {
+            // Saving the original order
+            sortedByName.push(item);
+            // Populate the arrays for doing the accents related search
+            Object.keys(SEARCH_ACCENTS_FIELDS).forEach(function(field) {
+              searchAccentsArrays[field] = searchAccentsArrays[field] || [];
+              if (item[field]) {
+                // The different words for each item
+                var words = item[field].split(/[ ]+/);
+                // The whole word itself is added
+                words.push(item[field]);
+                words.forEach(function(word) {
+                  var obj = {
+                    originalIndex: index
+                  };
+                  obj[field] = utils.text.normalize(word).toLowerCase();
+                  searchAccentsArrays[field].push(obj);
+                });
+              }
+            });
+            index++;
+          }
         });
 
-        if (numQueries === 3) {
-          mainSection.classList.add('no-proposal');
-          numFriendsProposed = 0;
+        if (numQueries === 2) {
+          var accentsProposal = searchAccents(searchAccentsArrays, cdata);
+          if (accentsProposal.length === 0) {
+            data = sortedByName;
+            mainSection.classList.add('no-proposal');
+            numFriendsProposed = 0;
+          }
+          else {
+            currentRecommendation = [];
+            accentsProposal.forEach(function(proposalIndex) {
+              currentRecommendation.push(sortedByName[proposalIndex]);
+            });
+            numFriendsProposed = currentRecommendation.length;
+          }
         } else {
           viewButton.textContent = _('viewAll');
           viewButton.onclick = UI.viewAllFriends;
         }
 
-        linkProposalElement.textContent = _('linkProposal', {
-          numFriends: numFriendsProposed
-        });
-
-        utils.templates.append('#friends-list', data);
+        utils.templates.append('#friends-list', currentRecommendation);
         imgLoader.reload();
 
-        Curtain.hide(sendReadyEvent);
+        if (typeof completedCb === 'function') {
+          completedCb();
+        }
+
+        Curtain.hide(function onCurtainHide() {
+          sendReadyEvent();
+          window.addEventListener('message', function linkOnViewPort(e) {
+            if (e.origin !== fb.CONTACTS_APP_ORIGIN) {
+              return;
+            }
+            var data = e.data;
+            if (data && data.type === 'dom_transition_end') {
+              window.removeEventListener('message', linkOnViewPort);
+              utils.status.show(_('linkProposal', {
+                numFriends: numFriendsProposed
+              }));
+            }
+          });
+        });
       }
+    };
+
+
+    // This function needs to be called because link proposals through FB Query
+    //  do not work properly with words with special characters (bug 796714)
+    function searchAccents(searchArrays, contactData) {
+      var out = [];
+      var searchFields = Object.keys(SEARCH_ACCENTS_FIELDS);
+
+      function compareItems(target, item) {
+        var out;
+
+        if (typeof target === 'string') {
+          out = target.localeCompare(item);
+          if (out !== 0) {
+            if (item.indexOf(target) === 0) {
+              out = 0;
+            }
+          }
+        }
+
+        return out;
+      } // compareItems Function
+
+      searchFields.forEach(function(searchField) {
+        // The array is ordered according to the search field
+        // this enables an efficient binary search
+        var searchArray = searchArrays[searchField].sort(function(a, b) {
+          return a[searchField].localeCompare(b[searchField]);
+        });
+
+        var fieldToSearch = contactData[SEARCH_ACCENTS_FIELDS[searchField]];
+        if (fieldToSearch && fieldToSearch[0]) {
+          // Splitting in the different words
+          var dataToSearch = fieldToSearch[0].trim().split(/[ ]+/);
+
+          dataToSearch.forEach(function(aData) {
+            var targetString = utils.text.normalize(aData).toLowerCase();
+            var searchResult = utils.binarySearch(targetString, searchArray, {
+              arrayField: searchField,
+              compareFunction: compareItems
+            });
+
+            searchResult.forEach(function(aResult) {
+              var candidate = searchArray[aResult].originalIndex;
+              // Avoiding to show two times the same result element
+              if (out.indexOf(candidate) === -1) {
+                out.push(candidate);
+              }
+            });
+          });
+        }
+      });
+
+      return out;
     }
 
     function sendReadyEvent() {
@@ -289,16 +364,16 @@ if (!fb.link) {
     function setCurtainHandlersErrorProposal() {
       Curtain.oncancel = function() {
         cancelCb(true);
-      }
+      };
 
       Curtain.onretry = function getRemoteProposal() {
         Curtain.oncancel = function() {
           cancelCb(true);
-        }
+        };
         Curtain.show('wait', state);
 
         link.getRemoteProposal(access_token, contactid);
-      }
+      };
     }
 
     link.baseHandler = function(type) {
@@ -318,20 +393,20 @@ if (!fb.link) {
               }
             }
           });
-        }
+        };
         Curtain.oncancel = Curtain.hide;
       }
 
       Curtain.show(type, state);
-    }
+    };
 
     link.timeoutHandler = function() {
       link.baseHandler('timeout');
-    }
+    };
 
     link.errorHandler = function() {
       link.baseHandler('error');
-    }
+    };
 
     /**
      *   Clears the list of contacts
@@ -343,7 +418,7 @@ if (!fb.link) {
       }
       var template = friendsList.querySelector('[data-template]');
 
-      friendsList.innerHTML = '';
+      utils.dom.removeChildNodes(friendsList);
       friendsList.appendChild(template);
     }
 
@@ -363,7 +438,7 @@ if (!fb.link) {
         });
 
         clearList();
-        
+
         var fragment = document.createDocumentFragment();
         utils.templates.append(friendsList, response.data, fragment);
         friendsList.appendChild(fragment);
@@ -386,7 +461,7 @@ if (!fb.link) {
         }
         Curtain.show('error', 'friends');
       }
-    }
+    };
 
     function setCurtainHandlers() {
       Curtain.oncancel = function curtain_cancel() {
@@ -394,7 +469,10 @@ if (!fb.link) {
       };
     }
 
-    link.start = function(contactId, acc_tk) {
+    link.start = function(contactId, acc_tk, endCb) {
+      // Only needed for testing purposes
+      completedCb = endCb;
+
       access_token = acc_tk;
       contactid = contactId;
 
@@ -404,15 +482,20 @@ if (!fb.link) {
                                   "li:not([data-uuid='#uid#'])");
 
       if (!acc_tk) {
-        fb.oauth.getAccessToken(function proposal_new_token(new_acc_tk) {
+        oauth2.getAccessToken(function proposal_new_token(new_acc_tk) {
           access_token = new_acc_tk;
           link.getProposal(contactId, new_acc_tk);
-        }, 'proposal');
+        }, 'proposal', 'facebook');
       }
       else {
         link.getProposal(contactId, acc_tk);
       }
-    }
+    };
+
+    link.init = function() {
+      mainSection = document.querySelector('#main');
+      viewButton = document.querySelector('#view-all');
+    };
 
     function retryOnErrorCb() {
       UI.selected({
@@ -433,7 +516,7 @@ if (!fb.link) {
           type: 'token_error',
           data: ''
         }, fb.CONTACTS_APP_ORIGIN);
-      }
+      };
       window.asyncStorage.removeItem(fb.utils.TOKEN_DATA_KEY, cb);
     }
 
@@ -457,16 +540,15 @@ if (!fb.link) {
         }
         else {
           state = 'linking';
-          var importReq = fb.importer.importFriend(friendUidToLink,
-                                                   access_token);
+          var callbacks = { };
 
-          importReq.onsuccess = function() {
+          callbacks.success = function(data) {
             Curtain.hide(function() {
-              notifyParent(importReq.result);
+              notifyParent(data);
             });
-          }
+          };
 
-          importReq.onerror = function(e) {
+          callbacks.error = function(e) {
             var error = e.target.error;
             window.console.error('FB: Error while importing friend data ',
                                  JSON.stringify(error));
@@ -478,21 +560,24 @@ if (!fb.link) {
               Curtain.onretry = handleTokenError;
             }
             Curtain.show('error', 'linking');
-          }
+          };
 
-          importReq.ontimeout = function() {
+          callbacks.timeout = function() {
             link.baseHandler('timeout');
-          }
+          };
+
+          FacebookConnector.importContact(friendUidToLink, access_token,
+                                          callbacks);
         }
-      }
+      };
 
       req.onerror = function() {
         window.console.error('FB: Error while importing friend data');
         Curtain.oncancel = Curtain.hide;
         Curtain.onretry = retryOnErrorCb;
         Curtain.show('error', 'linking');
-      }
-    }
+      };
+    };
 
 
     UI.end = function(event) {
@@ -502,7 +587,7 @@ if (!fb.link) {
       };
 
       parent.postMessage(msg, fb.CONTACTS_APP_ORIGIN);
-    }
+    };
 
     function notifyParent(data) {
       var msg = {
@@ -525,7 +610,7 @@ if (!fb.link) {
       }
 
       return false;
-    }
+    };
 
     UI.viewRecommended = function(event) {
       // event.target === viewButton
@@ -537,7 +622,7 @@ if (!fb.link) {
       imgLoader.reload();
 
       return false;
-    }
+    };
 
   })(document);
 }

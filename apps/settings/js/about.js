@@ -80,14 +80,16 @@ var About = {
   },
 
   loadHardwareInfo: function about_loadHardwareInfo() {
-    if (!gMobileConnection)
+    var mobileConnection = getMobileConnection();
+    if (!mobileConnection)
       return;
 
-    var info = gMobileConnection.iccInfo;
+    var info = mobileConnection.iccInfo;
     document.getElementById('deviceInfo-iccid').textContent = info.iccid;
-    document.getElementById('deviceInfo-msisdn').textContent = info.msisdn;
+    document.getElementById('deviceInfo-msisdn').textContent = info.msisdn ||
+      navigator.mozL10n.get('unknown-phoneNumber');
 
-    var req = gMobileConnection.sendMMI('*#06#');
+    var req = mobileConnection.sendMMI('*#06#');
     req.onsuccess = function getIMEI() {
       document.getElementById('deviceInfo-imei').textContent = req.result;
     };
@@ -114,6 +116,8 @@ var About = {
        *   - already-latest-version
        *   - check-complete
        *   - retry-when-online
+       *   - check-error-$nsresult
+       *   - check-error-http-$code
        *
        * - for apps updates:
        *   - check-complete
@@ -124,7 +128,8 @@ var About = {
        */
 
       if (value !== 'check-complete') {
-        systemStatus.textContent = _(value, null, value);
+        systemStatus.textContent = _(value) || _('check-error');
+        console.error('Error checking for system update:', value);
       }
 
       checkIfStatusComplete();
@@ -211,11 +216,11 @@ var About = {
         } else {
           alert(navigator.mozL10n.get('no-ftu'));
         }
-      }
-    }
+      };
+    };
   }
 };
 
 // startup
-onLocalized(About.init.bind(About));
+navigator.mozL10n.ready(About.init.bind(About));
 

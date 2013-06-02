@@ -16,12 +16,23 @@ function Icon(descriptor, app) {
   this.updateAppStatus(app);
 }
 
-Icon.prototype = {
-  MIN_ICON_SIZE: 52,
-  MAX_ICON_SIZE: 60,
 
-  DEFAULT_BOOKMARK_ICON_URL: window.location.protocol + '//' + window.location.host +
-                    '/style/images/default_favicon.png',
+// Support rendering icons for different screens
+var BASE_WIDTH = 320;
+var SCALE_RATIO = window.innerWidth / BASE_WIDTH;
+var MIN_ICON_SIZE = 52 * SCALE_RATIO;
+var MAX_ICON_SIZE = 60 * SCALE_RATIO;
+
+var DRAGGING_TRANSITION = '-moz-transform .3s';
+
+Icon.prototype = {
+
+  MAX_ICON_SIZE: MAX_ICON_SIZE,
+
+  MIN_ICON_SIZE: MIN_ICON_SIZE,
+
+  DEFAULT_BOOKMARK_ICON_URL: window.location.protocol + '//' +
+                    window.location.host + '/style/images/default_favicon.png',
   DEFAULT_ICON_URL: window.location.protocol + '//' + window.location.host +
                     '/style/images/default.png',
   DOWNLOAD_ICON_URL: window.location.protocol + '//' + window.location.host +
@@ -32,12 +43,29 @@ Icon.prototype = {
   // These properties will be copied from the descriptor onto the icon's HTML
   // element dataset and allow us to uniquely look up the Icon object from
   // the HTML element.
-  _descriptorIdentifiers: ['manifestURL', 'entry_point', 'bookmarkURL'],
+  _descriptorIdentifiers: ['manifestURL', 'entry_point', 'bookmarkURL',
+                           'useAsyncPanZoom'],
 
   /**
    * The Application (or Bookmark) object corresponding to this icon.
    */
   app: null,
+
+  /**
+   * It returns an unique identifier among all icons installed on the homescreen
+   */
+  getUID: function icon_getUID() {
+    var descriptor = this.descriptor;
+
+    return (descriptor.manifestURL || descriptor.bookmarkURL) +
+           (descriptor.entry_point ? descriptor.entry_point : '');
+  },
+
+  isOfflineReady: function icon_isOfflineReady() {
+    return !(this.descriptor.isHosted &&
+      !this.descriptor.hasOfflineCache ||
+      this.descriptor.isBookmark);
+  },
 
   /*
    * Renders the icon into the page
@@ -56,7 +84,9 @@ Icon.prototype = {
      *   <span class="options"></span>
      * </li>
      */
+
     var container = this.container = document.createElement('li');
+    this.container.dataset.offlineReady = this.isOfflineReady();
     container.className = 'icon';
     if (this.descriptor.hidden) {
       delete this.descriptor.hidden;
@@ -80,21 +110,16 @@ Icon.prototype = {
 
     // Image
     var img = this.img = new Image();
-    icon.appendChild(img);
+    img.setAttribute('role', 'presentation');
+    img.width = MAX_ICON_SIZE + 4 * SCALE_RATIO;
+    img.height = MAX_ICON_SIZE + 4 * SCALE_RATIO;
     img.style.visibility = 'hidden';
-    if (this.downloading) {
-      img.src = descriptor.icon;
-      img.style.visibility = 'visible';
+    if (descriptor.renderedIcon) {
+      this.displayRenderedIcon();
     } else {
-      img.setAttribute('role', 'presentation');
-      img.width = 64;
-      img.height = 64;
-      if (descriptor.renderedIcon) {
-        this.displayRenderedIcon();
-      } else {
-        this.fetchImageData();
-      }
+      this.fetchImageData();
     }
+    icon.appendChild(img);
 
     // Label
 
@@ -105,17 +130,14 @@ Icon.prototype = {
     var label = this.label = document.createElement('span');
     label.textContent = localizedName;
     wrapper.appendChild(label);
+    this.applyOverflowTextMask();
 
     icon.appendChild(wrapper);
 
     container.appendChild(icon);
 
-    if (descriptor.removable) {
-      // Menu button to delete the app
-      var options = document.createElement('span');
-      options.className = 'options';
-      options.dataset.isIcon = true;
-      container.appendChild(options);
+    if (descriptor.removable === true) {
+      this.appendOptions();
     }
 
     target.appendChild(container);
@@ -128,112 +150,158 @@ Icon.prototype = {
     }
   },
 
+  appendOptions: function icon_appendOptions() {
+    var options = this.container.querySelector('.options');
+    if (options) {
+      return;
+    }
+
+    // Menu button to delete the app
+    options = document.createElement('span');
+    options.className = 'options';
+    options.dataset.isIcon = true;
+    this.container.appendChild(options);
+  },
+
+  removeOptions: function icon_removeOptions() {
+    var options = this.container.querySelector('.options');
+    if (!options) {
+      return;
+    }
+
+    this.container.removeChild(options);
+  },
+
+  applyOverflowTextMask: function icon_applyOverflowTextMask() {
+    var label = this.label;
+    if (TextOverflowDetective.check(label.textContent)) {
+      label.parentNode.classList.add('mask');
+    } else {
+      label.parentNode.classList.remove('mask');
+    }
+  },
+
   fetchImageData: function icon_fetchImageData() {
     var descriptor = this.descriptor;
     var icon = descriptor.icon;
     if (!icon) {
-      this.loadImageData();
+      this.loadCachedIcon();
       return;
     }
 
-    // If we already have locally cached data, load the image right away.
-    if (icon.indexOf('data:') == 0) {
-       this.loadImageData();
-       return;
-    }
+    // Display the default/oldRendered icon before trying to get the icon.
+    // Sometimes when the network is quite bad the XHR can take time, and we
+    // have an empty space
+    this.loadCachedIcon();
 
-    var self = this;
-    var xhr = new XMLHttpRequest({mozAnon: true, mozSystem: true});
-    xhr.open('GET', icon, true);
-    xhr.responseType = 'blob';
-    try {
-      xhr.send(null);
-    } catch (e) {
-      console.error('Got an exception when trying to load icon "' + icon +
-          '", falling back to default icon. Exception is:', e);
-      this.loadImageData();
-      return;
-    }
-
-    xhr.onreadystatechange = function saveIcon_readyStateChange(evt) {
-      if (xhr.readyState != xhr.DONE)
-        return;
-
-      if (xhr.status != 0 && xhr.status != 200) {
-        self.loadImageData();
-        return;
+    IconRetriever.get({
+      icon: this,
+      success: function(blob) {
+        this.loadImageData(blob);
+      },
+      error: function() {
+        if (this.icon && !this.downloading &&
+            this.icon.classList.contains('loading')) {
+          this.icon.classList.remove('loading');
+          this.img.src = null;
+        }
+        this.loadCachedIcon();
       }
-      self.loadImageData(xhr.response);
-    };
+    });
+  },
 
-    xhr.onerror = function saveIcon_onerror() {
-      self.loadImageData();
-    };
+  loadCachedIcon: function icon_loadCachedImage() {
+    var oldRenderedIcon = this.descriptor.oldRenderedIcon;
+    if (oldRenderedIcon && oldRenderedIcon instanceof Blob) {
+      this.renderBlob(oldRenderedIcon);
+    } else {
+      this.loadDefaultIcon();
+    }
   },
 
   loadImageData: function icon_loadImageData(blob) {
     var self = this;
     var img = new Image();
-    if (blob) {
-      var url = window.URL.createObjectURL(blob);
-      img.src = url;
-    } else {
-      img.src = this.descriptor.icon;
-    }
+    img.src = window.URL.createObjectURL(blob);
 
     if (this.icon && !this.downloading) {
       this.icon.classList.remove('loading');
     }
 
     img.onload = function icon_loadSuccess() {
-      if (blob)
-        window.URL.revokeObjectURL(img.src);
+      img.onload = img.onerror = null;
+      window.URL.revokeObjectURL(img.src);
       self.renderImage(img);
     };
 
     img.onerror = function icon_loadError() {
-      if (blob)
-        window.URL.revokeObjectURL(img.src);
-      img.src = getDefaultIcon(self.app);
-      img.onload = function icon_errorIconLoadSucess() {
-        self.renderImage(img);
-      };
+      console.error('error while loading the icon', img.src, '. Falling back ' +
+          'to default icon.');
+      window.URL.revokeObjectURL(img.src);
+      self.loadDefaultIcon(img);
     };
   },
 
-  renderImageForBookMark: function icon_renderImageForBookmark(img){
+  loadDefaultIcon: function icon_loadDefaultIcon(img) {
+    var image = img || new Image();
+    var self = this;
+
+    if (self.img && self.img.src) {
+      // If there is one already loaded, do not continue...
+      image.onload = image.onerror = null;
+      return;
+    }
+
+    var blob = GridManager.getBlobByDefault(self.app);
+    if (blob === null) {
+      // At this point theoretically the flow shouldn't go because the icons
+      // by default have to be loaded, but just in case to avoid race conditions
+      image.src = getDefaultIcon(self.app);
+      image.onload = function icon_defaultIconLoadSucess() {
+        image.onload = image.onerror = null;
+        self.renderImage(image);
+      };
+    } else {
+      self.renderBlob(blob);
+      image.onload = image.onerror = null;
+    }
+  },
+
+  renderImageForBookMark: function icon_renderImageForBookmark(img) {
     var self = this;
     var canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
+    canvas.width = MAX_ICON_SIZE + 4 * SCALE_RATIO;
+    canvas.height = MAX_ICON_SIZE + 4 * SCALE_RATIO;
     var ctx = canvas.getContext('2d');
 
     // Draw the background
     var background = new Image();
     background.src = 'style/images/default_background.png';
-    background.onload = function icon_loadBackgroundSuccess(){
+    background.onload = function icon_loadBackgroundSuccess() {
       ctx.shadowColor = 'rgba(0,0,0,0.8)';
       ctx.shadowBlur = 2;
       ctx.shadowOffsetY = 2;
-      ctx.drawImage(background,2,2);
+      ctx.drawImage(background, 2 * SCALE_RATIO,
+                    2 * SCALE_RATIO, MAX_ICON_SIZE, MAX_ICON_SIZE);
       // Disable smoothing on icon resize
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
       ctx.mozImageSmoothingEnabled = false;
-      ctx.drawImage(img,16,16,32,32);
+      ctx.drawImage(img, 16 * SCALE_RATIO, 16 * SCALE_RATIO,
+                    32 * SCALE_RATIO, 32 * SCALE_RATIO);
       canvas.toBlob(self.renderBlob.bind(self));
     };
   },
 
   renderImage: function icon_renderImage(img) {
-    if( this.app && this.app.iconable ) {
+    if (this.app && this.app.iconable) {
       this.renderImageForBookMark(img);
       return;
     }
 
     var canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
+    canvas.width = MAX_ICON_SIZE + 4 * SCALE_RATIO;
+    canvas.height = MAX_ICON_SIZE + 4 * SCALE_RATIO;
 
     var ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -243,12 +311,12 @@ Icon.prototype = {
 
     // Deal with very small or very large icons
     img.width =
-        Math.min(this.MAX_ICON_SIZE, Math.max(img.width, this.MIN_ICON_SIZE));
+        Math.min(MAX_ICON_SIZE, Math.max(img.width, MAX_ICON_SIZE));
     img.height =
-        Math.min(this.MAX_ICON_SIZE, Math.max(img.height, this.MIN_ICON_SIZE));
+        Math.min(MAX_ICON_SIZE, Math.max(img.height, MAX_ICON_SIZE));
 
-    var width = Math.min(img.width, canvas.width - 4);
-    var height = Math.min(img.width, canvas.height - 4);
+    var width = Math.min(img.width, canvas.width - 4 * SCALE_RATIO);
+    var height = Math.min(img.width, canvas.height - 4 * SCALE_RATIO);
     ctx.drawImage(img,
                   (canvas.width - width) / 2,
                   (canvas.height - height) / 2,
@@ -258,24 +326,32 @@ Icon.prototype = {
     canvas.toBlob(this.renderBlob.bind(this));
   },
 
+  // The url that is passed as a parameter to the callback must be revoked
+  loadRenderedIcon: function icon_loadRenderedIcon(callback) {
+    var img = this.img;
+    img.src = window.URL.createObjectURL(this.descriptor.renderedIcon);
+    if (callback) {
+      img.onload = img.onerror = function done() {
+        callback(this.src);
+        img.onload = img.onerror = null;
+      };
+    }
+  },
+
   renderBlob: function icon_renderBlob(blob) {
     this.descriptor.renderedIcon = blob;
     GridManager.markDirtyState();
     this.displayRenderedIcon();
   },
 
-  displayRenderedIcon: function icon_displayRenderedIcon(img, skipRevoke) {
-    img = img || this.img;
-    var url = window.URL.createObjectURL(this.descriptor.renderedIcon);
-    img.src = url;
+  displayRenderedIcon: function icon_displayRenderedIcon() {
     var self = this;
-    img.onload = img.onerror = function cleanup() {
-      img.style.visibility = 'visible';
-      if (!skipRevoke)
-        window.URL.revokeObjectURL(url);
+    this.loadRenderedIcon(function cleanup(url) {
+      self.img.style.visibility = 'visible';
+      window.URL.revokeObjectURL(url);
       if (self.needsShow)
         self.show();
-    };
+    });
   },
 
   show: function icon_show() {
@@ -309,11 +385,16 @@ Icon.prototype = {
     this.updateAppStatus(app);
     var oldDescriptor = this.descriptor;
     this.descriptor = descriptor;
+    descriptor.removable === true ? this.appendOptions() : this.removeOptions();
+
+    // Update offline availability
+    this.container.dataset.offlineReady = this.isOfflineReady();
 
     if (descriptor.updateTime == oldDescriptor.updateTime &&
         descriptor.icon == oldDescriptor.icon) {
       this.descriptor.renderedIcon = oldDescriptor.renderedIcon;
     } else {
+      this.descriptor.oldRenderedIcon = oldDescriptor.renderedIcon;
       this.fetchImageData();
     }
     if (descriptor.updateTime != oldDescriptor.updateTime ||
@@ -368,6 +449,8 @@ Icon.prototype = {
       descriptor.localizedName = localizedName;
       GridManager.markDirtyState();
     }
+
+    this.applyOverflowTextMask();
   },
 
   /*
@@ -387,8 +470,7 @@ Icon.prototype = {
     // For some reason, cloning and moving a node re-triggers the blob
     // URI to be validated. So we assign a new blob URI to the image
     // and don't revoke it until we're finished with the animation.
-    var skipRevoke = true;
-    this.displayRenderedIcon(this.img, skipRevoke);
+    this.loadRenderedIcon();
 
     var icon = this.icon.cloneNode();
     var img = icon.querySelector('img');
@@ -418,18 +500,6 @@ Icon.prototype = {
 
   removeClassToDragElement: function icon_addStyleToDragElement(className) {
     this.draggableElem.classList.remove(className);
-  },
-
-  /*
-   * This method is invoked when the draggable elem is moving
-   *
-   * @param{int} x-coordinate
-   *
-   * @param{int} y-coordinate
-   */
-  onDragMove: function icon_onDragMove(x, y) {
-    this.draggableElem.style.MozTransform =
-      'translate(' + (x - this.initX) + 'px,' + (y - this.initY) + 'px)';
   },
 
   /*
@@ -468,6 +538,41 @@ Icon.prototype = {
 
   getLeft: function icon_getLeft() {
     return this.container.getBoundingClientRect().left;
+  },
+
+  getWidth: function icon_getWidth() {
+    return this.container.getBoundingClientRect().width;
+  }
+};
+
+function TemplateIcon(isBookmark) {
+  var descriptor = {
+    name: 'templateIcon',
+    hidden: true,
+    renderedIcon: null
+  };
+
+  var app = {};
+  if (isBookmark) {
+    app.iconable = true;
+  }
+
+  Icon.call(this, descriptor, app);
+}
+
+TemplateIcon.prototype = {
+  __proto__: Icon.prototype,
+  loadDefaultIcon: function ticon_loadDefaultIcon() {
+    var image = new Image();
+    var self = this;
+    image.src = getDefaultIcon(self.app);
+    image.onload = function icon_defaultIconLoadSucess() {
+      image.onload = null;
+      self.renderImage(image);
+    };
+  },
+  renderBlob: function ticon_renderBlob(blob) {
+    this.descriptor.renderedIcon = blob;
   }
 };
 
@@ -484,9 +589,14 @@ function Page(container, icons) {
   this.container = this.movableContainer = container;
   if (icons)
     this.render(icons);
+  this.iconsWhileDragging = [];
 }
 
 Page.prototype = {
+
+  // After launching an app we disable the page during <this time> in order to
+  // prevent multiple open-app animations
+  DISABLE_TAP_EVENT_DELAY: 600,
 
   /*
    * Renders a page for a list of apps
@@ -526,14 +636,13 @@ Page.prototype = {
     style.MozTransition = '';
   },
 
-
   ready: true,
 
   setReady: function pg_setReady(value) {
-    this.ready = value;
-    if (value && this.onReArranged) {
-      this.onReArranged();
+    if (value) {
+      this.container.dispatchEvent(new CustomEvent('onpageready'));
     }
+    this.ready = value;
   },
 
   /*
@@ -546,54 +655,106 @@ Page.prototype = {
    *               The target icon that is replaced by the origin icon.
    */
   drop: function pg_drop(originIcon, targetIcon) {
-    if (originIcon === targetIcon) {
+    if (!this.ready || originIcon === targetIcon) {
       return;
     }
 
     this.setReady(false);
 
-    if (originIcon && targetIcon) {
-      this.animate(this.olist.children, originIcon.container,
+    var iconList = this.olist.children;
+    if (originIcon && targetIcon && iconList.length > 1) {
+      if (this.iconsWhileDragging.length === 0)
+        this.iconsWhileDragging = Array.prototype.slice.call(iconList, 0,
+                                                             iconList.length);
+
+      this.animate(this.iconsWhileDragging, originIcon.container,
                    targetIcon.container);
     } else {
-      this.setReady(true);
+      setTimeout(this.setReady.bind(this, true));
     }
   },
 
-  animate: function pg_anim(children, originNode, targetNode) {
-    var beforeNode = targetNode;
-    var initialIndex = children.indexOf(originNode);
-    var endIndex = children.indexOf(targetNode);
-    var upward = initialIndex < endIndex;
-    if (upward) {
-      beforeNode = targetNode.nextSibling;
-      initialIndex++;
-    } else {
-      initialIndex = initialIndex + endIndex;
-      endIndex = initialIndex - endIndex;
-      initialIndex = initialIndex - endIndex;
-      endIndex--;
+  animate: function pg_animate(children, draggableNode, targetNode) {
+    var draggableIndex = children.indexOf(draggableNode);
+    var targetIndex = children.indexOf(targetNode);
+
+    if (draggableIndex === -1 || targetIndex === -1) {
+      // Index is outside the bounds of the array, it doesn't make sense
+      setTimeout(this.setReady.bind(this, true));
+      return;
     }
+
+    var upward = draggableIndex < targetIndex;
+    this.draggableNode = draggableNode;
+    this.beforeNode = upward ? targetNode.nextSibling : targetNode;
+    this.placeIcon(draggableNode, draggableIndex, targetIndex);
 
     var self = this;
-    var lastNode = children[endIndex];
-    this.setAnimation(children, initialIndex, endIndex, upward);
-    lastNode.addEventListener('animationend', function animationEnd(e) {
-      for (var i = initialIndex; i <= endIndex; i++) {
-        children[i].style.MozAnimationName = '';
-      }
-      self.olist.insertBefore(originNode, beforeNode);
-      lastNode.removeEventListener('animationend', animationEnd);
-      self.setReady(true);
+    targetNode.addEventListener('transitionend', function onTransitionEnd() {
+      targetNode.removeEventListener('transitionend', onTransitionEnd);
+      children.splice(draggableIndex, 1);
+      children.splice(targetIndex, 0, draggableNode);
+      setTimeout(self.setReady.bind(self, true));
     });
+
+    if (upward) {
+      for (var i = draggableIndex + 1; i <= targetIndex; i++)
+        this.placeIcon(children[i], i, i - 1, DRAGGING_TRANSITION);
+    } else {
+      for (var i = targetIndex; i < draggableIndex; i++)
+        this.placeIcon(children[i], i, i + 1, DRAGGING_TRANSITION);
+    }
   },
 
-  setAnimation: function pg_setAnimation(children, init, end, upward) {
-    for (var i = init; i <= end; i++) {
-      children[i].style.MozAnimationName = upward ?
-        (i % 4 === 0 ? 'jumpPrevRow' : 'jumpPrevCell') :
-        (i % 4 === 3 ? 'jumpNextRow' : 'jumpNextCell');
+  doDragLeave: function pg_doReArrange(callback, reflow) {
+    this.iconsWhileDragging.forEach(function reset(node) {
+      node.style.MozTransform = node.style.MozTransition = '';
+      delete node.dataset.posX;
+      delete node.dataset.posY;
+    });
+
+    this.iconsWhileDragging = [];
+
+    if (reflow && this.olist.contains(this.draggableNode))
+      this.olist.insertBefore(this.draggableNode, this.beforeNode);
+
+    callback();
+  },
+
+  onDragLeave: function pg_onDragLeave(callback, reflow) {
+    if (this.iconsWhileDragging.length === 0) {
+      setTimeout(callback);
+      return;
     }
+
+    if (!this.ready) {
+      var self = this;
+
+      self.container.addEventListener('onpageready', function onPageReady() {
+        self.container.removeEventListener('onpageready', onPageReady);
+        self.doDragLeave(callback, reflow);
+      });
+
+      return;
+    }
+
+    this.doDragLeave(callback, reflow);
+  },
+
+  placeIcon: function pg_placeIcon(node, from, to, transition) {
+    if (!node)
+      return;
+
+    var x = node.dataset.posX = parseInt(node.dataset.posX || 0) +
+                      ((Math.floor(to % 4) - Math.floor(from % 4)) * 100);
+    var y = node.dataset.posY = parseInt(node.dataset.posY || 0) +
+                      ((Math.floor(to / 4) - Math.floor(from / 4)) * 100);
+
+    window.mozRequestAnimationFrame(function() {
+      node.style.MozTransform = 'translate(' + x + '%, ' + y + '%)';
+      if (transition)
+        node.style.MozTransition = transition;
+    });
   },
 
   /*
@@ -603,18 +764,20 @@ Page.prototype = {
    */
   tap: function pg_tap(elem) {
     if (Homescreen.isInEditMode()) {
-      if (elem.className === 'options') {
+      if (elem.classList.contains('options')) {
         var icon = GridManager.getIcon(elem.parentNode.dataset);
         if (icon.app)
           Homescreen.showAppDialog(icon.app);
       }
-    } else if (elem.className === 'icon') {
+    } else if ('isIcon' in elem.dataset &&
+               !this.olist.getAttribute('disabled')) {
       var icon = GridManager.getIcon(elem.dataset);
       if (!icon.app)
         return;
 
       if (icon.descriptor.entry_point) {
         icon.app.launch(icon.descriptor.entry_point);
+        this.disableTap();
         return;
       }
 
@@ -623,7 +786,21 @@ Page.prototype = {
         return;
       }
       icon.app.launch();
+      this.disableTap();
     }
+  },
+
+  /*
+   * Disables the tap event for the page
+   *
+   * @param{Integer} milliseconds
+   */
+  disableTap: function pg_disableTap(icon, time) {
+    var olist = this.olist;
+    olist.setAttribute('disabled', true);
+    setTimeout(function disableTapTimeout() {
+      olist.removeAttribute('disabled');
+    }, time || this.DISABLE_TAP_EVENT_DELAY);
   },
 
   /*
@@ -665,6 +842,9 @@ Page.prototype = {
    */
   getLastIcon: function pg_getLastIcon() {
     var lastIcon = this.olist.lastChild;
+    if (this.iconsWhileDragging.length > 0)
+      lastIcon = this.iconsWhileDragging[this.iconsWhileDragging.length - 1];
+
     if (!lastIcon)
       return null;
     return GridManager.getIcon(lastIcon.dataset);
@@ -675,6 +855,9 @@ Page.prototype = {
    */
   getFirstIcon: function pg_getFirstIcon() {
     var firstIcon = this.olist.firstChild;
+    if (this.iconsWhileDragging.length > 0)
+      firstIcon = this.iconsWhileDragging[0];
+
     if (!firstIcon)
       return null;
     return GridManager.getIcon(firstIcon.dataset);
@@ -693,6 +876,22 @@ Page.prototype = {
     this.setReady(false);
     this.olist.appendChild(icon.container);
     this.setReady(true);
+  },
+
+  /**
+   * Appends an icon to the end of the page
+   * If the page is already full, then we insert the icon at the last place, and
+   * the icon that was at the last place and will be hidden will eventually flow
+   * to the next page. This is done in GridManager's ensurePagesOverflow
+   *
+   * @param {Object} icon the icon to be added.
+   */
+  appendIconVisible: function pg_appendIconVisible(icon) {
+    if (this.getNumIcons() >= GridManager.pageHelper.maxIconsPerPage) {
+      this.insertBeforeLastIcon(icon);
+    } else {
+      this.appendIcon(icon);
+    }
   },
 
   containsIcon: function pg_containsIcon(icon) {
@@ -729,7 +928,7 @@ Page.prototype = {
   }
 };
 
-function getDefaultIcon(app){
+function getDefaultIcon(app) {
   if (app && app.iconable) {
     return Icon.prototype.DEFAULT_BOOKMARK_ICON_URL;
   } else {
@@ -774,28 +973,59 @@ dockProto.moveByWithDuration = function dk_moveByWithDuration(scrollX,
   style.MozTransition = '-moz-transform ' + duration + 'ms ease';
 };
 
-
-dockProto.setAnimation = function dk_setAnimation(children, init, end, upward) {
-  var animation = upward ? 'jumpPrevCell' : 'jumpNextCell';
-  for (var i = init; i <= end; i++) {
-    children[i].style.MozAnimationName = animation;
-  }
-};
-
 dockProto.getLeft = function dk_getLeft() {
   return this.olist.getBoundingClientRect().left;
 };
 
+/**
+ * Returns the right position of the last icon in the dock
+ */
 dockProto.getRight = function dk_getRight() {
-  return this.getLeft() + this.getWidth();
+  var children = this.olist.children;
+  var lastChild = children[children.length - 1];
+  if (!lastChild) {
+    return 0;
+  }
+
+  return lastChild.getBoundingClientRect().right;
 };
 
 dockProto.getWidth = function dk_getWidth() {
   return this.olist.clientWidth;
 };
 
-dockProto.getChildren = function dk_getChildren() {
-  return this.olist.children;
+dockProto.placeIcon = function pg_placeIcon(node, from, to, transition) {
+  if (!node)
+    return;
+
+  var x = node.dataset.posX = parseInt(node.dataset.posX || 0) + (to - from) *
+                              100;
+
+  node.style.MozTransform = 'translateX(' + x + '%)';
+  if (transition)
+    node.style.MozTransition = transition;
 };
 
-HTMLCollection.prototype.indexOf = Array.prototype.indexOf;
+const TextOverflowDetective = (function() {
+
+  var iconFakeWrapperWidth;
+  var iconFakeLabel;
+
+  function init() {
+    var fakeIconName = document.querySelector('#fake-icon-name-wrapper');
+    iconFakeWrapperWidth = fakeIconName.offsetWidth;
+    iconFakeLabel = document.querySelector('#fake-icon-name');
+  }
+
+  function check(text) {
+    if (!iconFakeLabel || !iconFakeWrapperWidth) {
+      init();
+    }
+    iconFakeLabel.textContent = text;
+    return iconFakeLabel.offsetWidth >= iconFakeWrapperWidth;
+  }
+
+  return {
+    check: check
+  };
+})();

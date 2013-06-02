@@ -1,17 +1,14 @@
-requireApp('calendar/test/unit/helper.js', function() {
-  require('/shared/js/gesture_detector.js');
-  requireLib('timespan.js');
-  requireLib('utils/ordered_map.js');
-  requireLib('views/time_parent.js');
-});
+require('/shared/js/gesture_detector.js');
+requireLib('timespan.js');
 
-suite('views/time_parent', function() {
+suiteGroup('Views.TimeParent', function() {
 
   var testEl;
   var viewDate = new Date(2012, 1, 15);
   var app;
   var subject;
   var id;
+  var scrollTop;
   var controller;
 
   var TimeParent;
@@ -54,6 +51,14 @@ suite('views/time_parent', function() {
       el.id = this.id;
       this.element = el;
       return el;
+    },
+
+    getScrollTop: function() {
+      return this.scrollTop;
+    },
+
+    setScrollTop: function(scrollTop) {
+      this.scrollTop = scrollTop;
     }
   };
 
@@ -259,6 +264,16 @@ suite('views/time_parent', function() {
       // verify other children where removed
       assert.length(subject.frameContainer.children, 3);
     });
+
+    test('the same scrollTop between day ane week views', function() {
+      subject.currentFrame.setScrollTop(100);
+
+      var next = subject._nextTime(date);
+      subject.changeDate(next);
+      var scrollTop = subject.currentFrame.getScrollTop();
+
+      assert.equal(scrollTop, 100, 'same scrollTop');
+    });
   });
 
   suite('#handleEvent', function() {
@@ -267,7 +282,7 @@ suite('views/time_parent', function() {
       var calledWith;
       subject.purgeFrames = function() {
         calledWith = arguments;
-      }
+      };
 
       subject.app.timeController.emit('purge', span);
       assert.equal(calledWith[0], span);
@@ -329,6 +344,10 @@ suite('views/time_parent', function() {
         subject.frames.set(items[key].id, items[key]);
       }
 
+      // set current frame to a frame
+      // that will be deleted...
+      subject.currentFrame = items.contains;
+
       subject.purgeFrames(purgeSpan);
     });
 
@@ -341,6 +360,11 @@ suite('views/time_parent', function() {
 
       assert.ok(!frames.get(items.same.id), 'removed same');
       assert.ok(!frames.get(items.contains.id), 'removed contains');
+
+      assert.ok(
+        !subject.currentFrame,
+        'removes current frame when it is deleted'
+      );
 
       assert.isTrue(items.same.destroyed);
       assert.isTrue(items.contains.destroyed);

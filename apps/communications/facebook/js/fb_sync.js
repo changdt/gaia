@@ -48,7 +48,7 @@ if (!fb.sync) {
       theWorker = new Worker('/facebook/js/sync_worker.js');
       theWorker.onmessage = function(e) {
         workerMessage(e.data);
-      }
+      };
       theWorker.onerror = function(e) {
         window.console.error('Worker Error', e.message, e.lineno, e.column);
         if (typeof errorCallback === 'function') {
@@ -56,7 +56,7 @@ if (!fb.sync) {
             type: 'default_error'
           });
         }
-      }
+      };
     }
 
     function workerMessage(m) {
@@ -160,6 +160,11 @@ if (!fb.sync) {
         cfdata.fbInfo.adr = [address];
       }
 
+      if (cfdata.shortTelephone) {
+        cfdata.fbInfo.shortTelephone = cfdata.shortTelephone;
+        delete cfdata.shortTelephone;
+      }
+
        // Then the new data saved to the cache
       var fbContact = new fb.Contact(fbContactsById[contactId]);
       var fbReq = fbContact.update(cfdata);
@@ -168,7 +173,7 @@ if (!fb.sync) {
       fbReq.onsuccess = function() {
         debug('Friend updated correctly', cfdata.uid);
         onsuccessCb();
-      }
+      };
 
       // Error. mark the contact as pending to be synchronized
       fbReq.onerror = function() {
@@ -176,7 +181,7 @@ if (!fb.sync) {
                              cfdata.uid);
         changed++;
         checkTotals();
-      }
+      };
     }
 
     function removeFbFriend(contactId) {
@@ -198,7 +203,7 @@ if (!fb.sync) {
           // The counter has to be increased anyway
           changed++;
           checkTotals();
-        }
+        };
       }
       else {
         debug('Friend is not linked: ', contactId);
@@ -210,7 +215,7 @@ if (!fb.sync) {
           // The counter has to be increased anyway
           changed++;
           checkTotals();
-        }
+        };
       }
     }
 
@@ -295,12 +300,13 @@ if (!fb.sync) {
                 imgNeedsUpdate: forceUpdate,
                 timestamp: ts,
                 access_token: access_token,
-                operationsTimeout: fb.operationsTimeout
+                operationsTimeout: fb.operationsTimeout,
+                targetPictureSize: importUtils.getPreferredPictureDetail()
               }
             });
           });
         });
-      }
+      };
 
       req.onerror = function() {
         window.console.error('FB: Error while getting friends on the device',
@@ -310,8 +316,8 @@ if (!fb.sync) {
             name: 'defaultError'
           });
         }
-      }
-    }
+      };
+    };
 
     // Schedules a next synchronization
     Sync.scheduleNextSync = function() {
@@ -330,7 +336,7 @@ if (!fb.sync) {
       },0);
 
       return currentAlarmRequest;
-    }
+    };
 
     function cleanAlarmSchedFrame() {
       alarmFrame.src = null;
@@ -344,7 +350,7 @@ if (!fb.sync) {
         window.setTimeout(cleanAlarmSchedFrame, DELAY_ALARM_SCHED);
       }
       currentAlarmRequest.done(date);
-    }
+    };
 
 
     Sync.onAlarmError = function(e) {
@@ -356,11 +362,11 @@ if (!fb.sync) {
                            e);
 
       currentAlarmRequest.failed(e);
-    }
+    };
 
     Sync.debug = function() {
       debug.apply(this, arguments);
-    }
+    };
 
     // Starts a synchronization with data coming from import / link
     Sync.startWithData = function(contactList, myFriendsByUid, callbacks) {
@@ -443,7 +449,8 @@ if (!fb.sync) {
               data: {
                 access_token: access_token,
                 uids: toBeUpdated,
-                operationsTimeout: fb.operationsTimeout
+                operationsTimeout: fb.operationsTimeout,
+                targetPictureSize: importUtils.getPreferredPictureDetail()
               }
             });
           });
@@ -453,7 +460,7 @@ if (!fb.sync) {
           checkTotals();
         }
       });
-    }
+    };
 
 
 

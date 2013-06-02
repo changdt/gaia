@@ -13,15 +13,39 @@ var UIManager = {
     'finish-screen',
     'nav-bar',
     'main-title',
+    // Unlock SIM Screen
+    'unlock-sim-screen',
+    'unlock-sim-header',
     // PIN Screen
     'pincode-screen',
+    'pin-label',
+    'pin-retries-left',
     'pin-input',
-    'fake-sim-pin',
     'pin-error',
-    'sim-import-button',
-    'sim-import-feedback',
     'skip-pin-button',
     'unlock-sim-button',
+    // PUK Screen
+    'pukcode-screen',
+    'puk-label',
+    'puk-retries-left',
+    'puk-input',
+    'puk-info',
+    'puk-error',
+    'newpin-input',
+    'newpin-error',
+    'confirm-newpin-input',
+    'confirm-newpin-error',
+    // XCK Screen
+    'xckcode-screen',
+    'xck-label',
+    'xck-retries-left',
+    'xck-input',
+    'xck-error',
+    // Import contacts
+    'sim-import-button',
+    'no-sim',
+    'sd-import-button',
+    'no-sd',
     // Wifi
     'networks',
     'wifi-refresh-button',
@@ -34,6 +58,8 @@ var UIManager = {
     'time-form',
     // 3G
     'data-connection-switch',
+    // Geolocation
+    'geolocation-switch',
     // Tutorial
     'tutorial-screen',
     'tutorial-progress',
@@ -41,11 +67,16 @@ var UIManager = {
     'skip-tutorial-button',
     // Privacy Settings
     'share-performance',
-    'offline-error-dialog'
+    'offline-error-dialog',
+    // Browser privacy newsletter subscription
+    'newsletter-form',
+    'newsletter-input',
+    'newsletter-success-screen',
+    'offline-newsletter-error-dialog',
+    'invalid-email-error-dialog'
   ],
 
   init: function ui_init() {
-
     // Initialization of the DOM selectors
     this.domSelectors.forEach(function createElementRef(name) {
       this[toCamelCase(name)] = document.getElementById(name);
@@ -57,9 +88,10 @@ var UIManager = {
     this.timeConfigurationLabel.innerHTML = f.localeFormat(currentDate, format);
     this.dateConfigurationLabel.innerHTML = currentDate.
       toLocaleFormat('%Y-%m-%d');
+
     // Add events to DOM
-    this.fakeSimPin.addEventListener('input', this);
     this.simImportButton.addEventListener('click', this);
+    this.sdImportButton.addEventListener('click', this);
     this.skipPinButton.addEventListener('click', this);
     this.unlockSimButton.addEventListener('click', this);
 
@@ -71,16 +103,65 @@ var UIManager = {
 
     this.timeConfiguration.addEventListener('input', this);
     this.dateConfiguration.addEventListener('input', this);
-    // Initialize the timezone selector, see /shared/js/tz_select.js
-    var tzCont = document.getElementById('tz-continent');
-    var tzCity = document.getElementById('tz-city');
-    tzSelect(tzCont, tzCity, this.setTimeZone);
+    this.initTZ();
+
+    this.geolocationSwitch.addEventListener('click', this);
+
     // Prevent form submit in case something tries to send it
     this.timeForm.addEventListener('submit', function(event) {
       event.preventDefault();
     });
 
+    // Input scroll workaround
+    var top = this.newsletterInput.offsetTop;
+    this.newsletterInput.addEventListener('focus', function() {
+      window.addEventListener('resize', function resize() {
+        window.removeEventListener('resize', resize);
+        // Need to wait till resize is done
+        setTimeout(function() {
+          document.getElementById('browser_privacy').scrollTop = top;
+        }, 30);
+      });
+    });
+
+    // Browser privacy newsletter subscription
+    var basketCallback = function(err, data) {
+      utils.overlay.hide();
+      if (err || data.status !== 'ok') {
+        // We don't have any error numbers etc, so we are looking for
+        // 'email address' string in the error description.
+        if (err.desc.indexOf('email address') > -1) {
+          this.invalidEmailErrorDialog.classList.add('visible');
+        } else {
+          // Store locally
+          Basket.store(this.newsletterInput.value, function stored() {
+            UIManager.newsletterSuccessScreen.classList.add('visible');
+          });
+        }
+        return;
+      }
+      // if properly sent, remove stored email (in case of any)
+      window.asyncStorage.removeItem('newsletter_email');
+      this.newsletterForm.classList.add('hidden');
+      this.newsletterSuccessScreen.classList.add('visible');
+    };
+
+    this.offlineNewsletterErrorDialog
+      .querySelector('button')
+      .addEventListener('click',
+        function offlineDialogClick() {
+          this.offlineNewsletterErrorDialog.classList.remove('visible');
+        }.bind(this));
+
+    this.invalidEmailErrorDialog
+      .querySelector('button')
+      .addEventListener('click',
+        function invalidEmailDialogClick() {
+          this.invalidEmailErrorDialog.classList.remove('visible');
+        }.bind(this));
+
     this.skipTutorialButton.addEventListener('click', function() {
+      WifiManager.finish();
       window.close();
     });
     this.letsGoButton.addEventListener('click', function() {
@@ -92,8 +173,64 @@ var UIManager = {
     // Enable sharing performance data (saving to settings)
     this.sharePerformance.addEventListener('click', this);
     var button = this.offlineErrorDialog.querySelector('button');
-    button.addEventListener('click', this.onOfflineDialogButtonClick.bind(this));
+    button.addEventListener('click',
+                            this.onOfflineDialogButtonClick.bind(this));
+  },
 
+  sendNewsletter: function ui_sendNewsletter(callback) {
+    var self = this;
+    var emailValue = self.newsletterInput.value;
+    if (emailValue == '') {
+      return callback(true);
+    } else {
+      utils.overlay.show(_('email-loading'), 'spinner');
+      if (self.newsletterInput.checkValidity()) {
+        if (window.navigator.onLine) {
+          Basket.send(emailValue, function emailSent(err, data) {
+            if (err) {
+              if (err.desc && err.desc.indexOf('email address') > -1) {
+                ConfirmDialog.show(_('invalid-email-dialog-title'),
+                                   _('invalid-email-dialog-text'),
+                                   {
+                                    title: _('cancel'),
+                                    callback: function ok() {
+                                      ConfirmDialog.hide();
+                                    }
+                                   });
+                utils.overlay.hide();
+                return callback(false);
+              } else {
+                Basket.store(emailValue);
+              }
+            }
+            utils.overlay.hide();
+            return callback(true);
+          });
+        } else {
+          Basket.store(emailValue);
+          utils.overlay.hide();
+          return callback(true);
+        }
+      } else {
+        utils.overlay.hide();
+        ConfirmDialog.show(_('invalid-email-dialog-title'),
+                           _('invalid-email-dialog-text'),
+                           {
+                            title: _('cancel'),
+                            callback: function ok() {
+                              ConfirmDialog.hide();
+                            }
+                           });
+        return callback(false);
+      }
+    }
+  },
+
+  initTZ: function ui_initTZ() {
+    // Initialize the timezone selector, see /shared/js/tz_select.js
+    var tzRegion = document.getElementById('tz-region');
+    var tzCity = document.getElementById('tz-city');
+    tzSelect(tzRegion, tzCity, this.setTimeZone, this.setTimeZone);
   },
 
   handleEvent: function ui_handleEvent(event) {
@@ -103,14 +240,18 @@ var UIManager = {
         SimManager.skip();
         break;
       case 'unlock-sim-button':
+        Navigation.skipped = false;
         SimManager.unlock();
         break;
-      // workaround for a number-passsword input
-      case 'fake-sim-pin':
-        this.pinInput.value = this.fakeSimPin.value;
-        break;
       case 'sim-import-button':
-        SimManager.importContacts();
+        // Needed to give the browser the opportunity to properly refresh the UI
+        // Particularly the button toggling cycle (from inactive to active)
+        window.setTimeout(SimManager.importContacts, 0);
+        break;
+      case 'sd-import-button':
+        // Needed to give the browser the opportunity to properly refresh the UI
+        // Particularly the button toggling cycle (from inactive to active)
+        window.setTimeout(SdManager.importContacts, 0);
         break;
       // 3G
       case 'data-connection-switch':
@@ -119,10 +260,10 @@ var UIManager = {
         break;
       // WIFI
       case 'wifi-refresh-button':
-        WifiManager.scan(UIManager.renderNetworks);
+        WifiManager.scan(WifiUI.renderNetworks);
         break;
       case 'wifi-join-button':
-        this.joinNetwork();
+        WifiUI.joinNetwork();
         break;
       // Date & Time
       case 'time-configuration':
@@ -131,14 +272,18 @@ var UIManager = {
       case 'date-configuration':
         this.setDate();
         break;
+      // Geolocation
+      case 'geolocation-switch':
+        this.updateSetting(event.target.name, event.target.checked);
+        break;
       // Privacy
       case 'share-performance':
-        this.updateSetting(event.target.name, event.target.value);
+        this.updateSetting(event.target.name, event.target.checked);
         break;
       default:
         // wifi selection
-        if (event.target.parentNode.id == 'networks') {
-          this.chooseNetwork(event);
+        if (event.target.parentNode.id === 'networks-list') {
+          WifiUI.chooseNetwork(event);
         }
         break;
     }
@@ -163,27 +308,6 @@ var UIManager = {
     this.offlineErrorDialog.classList.remove('visible');
   },
 
-  joinNetwork: function ui_jn() {
-    var password = document.getElementById('wifi_password').value;
-    if (password == '') {
-      // TODO Check with UX if this error is needed
-      return;
-    }
-    var user = document.getElementById('wifi_user').value;
-    var ssid = document.getElementById('wifi_ssid').value;
-    if (WifiManager.isUserMandatory(ssid)) {
-      if (user == '') {
-        // TODO Check with UX if this error is needed
-        return;
-      }
-      WifiManager.connect(ssid, password, user);
-      window.history.back();
-    } else {
-      WifiManager.connect(ssid, password);
-      window.history.back();
-    }
-  },
-
   setDate: function ui_sd() {
     if (!!this.lock) {
       return;
@@ -197,7 +321,8 @@ var UIManager = {
     var currentTime = now.toLocaleFormat('%H:%M');
     var timeToSet = new Date(currentDate + 'T' + currentTime);
     TimeManager.set(timeToSet);
-    this.dateConfigurationLabel.innerHTML = timeToSet.toLocaleFormat('%Y-%m-%d');
+    this.dateConfigurationLabel.innerHTML =
+      timeToSet.toLocaleFormat('%Y-%m-%d');
   },
 
   setTime: function ui_st() {
@@ -209,7 +334,7 @@ var UIManager = {
     var now = new Date();
     // Format: 2012-09-01
     var currentTime = document.getElementById('time-configuration').value;
-    if (currentTime.indexOf(':') == 1) {  // Format: 8:05 --> 08:05
+    if (currentTime.indexOf(':') === 1) {  // Format: 8:05 --> 08:05
       currentTime = '0' + currentTime;
     }
     var currentDate = now.toLocaleFormat('%Y-%m-%d');
@@ -228,144 +353,19 @@ var UIManager = {
       utc.replace(/[+:]/g, '');
     document.getElementById('time-zone-title').textContent =
       utc + ' ' + timezone.id;
-    document.getElementById('tz-continent-label').textContent =
-      timezone.id.replace(/\/.*$/, '');
+    document.getElementById('tz-region-label').textContent = timezone.region;
     document.getElementById('tz-city-label').textContent = timezone.city;
-    // it can take a few milliseconds before the TZ change is reflected on time
-    setTimeout(function updateTime() {
-      var f = new navigator.mozL10n.DateTimeFormat();
-      var now = new Date();
-      var timeLabel = document.getElementById('time-configuration-label');
-      timeLabel.innerHTML = f.localeFormat(now, _('shortTimeFormat'));
-    });
+
+    var f = new navigator.mozL10n.DateTimeFormat();
+    var now = new Date();
+    var timeLabel = document.getElementById('time-configuration-label');
+    timeLabel.innerHTML = f.localeFormat(now, _('shortTimeFormat'));
   },
 
-  chooseNetwork: function ui_cn(event) {
-    // Retrieve SSID from dataset
-    var ssid = event.target.dataset.ssid;
-
-    // Do we need to type password?
-    if (!WifiManager.isPasswordMandatory(ssid)) {
-      WifiManager.connect(ssid);
-      return;
-    }
-
-    // Remove refresh option
-    UIManager.activationScreen.classList.add('no-options');
-    // Update title
-    UIManager.mainTitle.innerHTML = ssid;
-
-    // Update network
-    var selectedNetwork = WifiManager.getNetwork(ssid);
-    var ssidHeader = document.getElementById('wifi_ssid');
-    var userLabel = document.getElementById('label_wifi_user');
-    var userInput = document.getElementById('wifi_user');
-    var passwordInput = document.getElementById('wifi_password');
-    var showPassword = document.querySelector('input[name=show_password]');
-
-    // Show / Hide password
-    passwordInput.type = 'password';
-    passwordInput.value = '';
-    showPassword.checked = false;
-    showPassword.onchange = function() {
-      passwordInput.type = this.checked ? 'text' : 'password';
-    };
-
-    // Update form
-    passwordInput.value = '';
-    ssidHeader.value = ssid;
-
-    // Render form taking into account the type of network
-    UIManager.renderNetworkConfiguration(selectedNetwork, function() {
-      // Activate secondary menu
-      UIManager.navBar.classList.add('secondary-menu');
-      // Update changes in form
-      if (WifiManager.isUserMandatory(ssid)) {
-        userLabel.classList.remove('hidden');
-        userInput.classList.remove('hidden');
-      } else {
-        userLabel.classList.add('hidden');
-        userInput.classList.add('hidden');
-      }
-
-      // Change hash
-      window.location.hash = '#configure_network';
-    });
-  },
-
-  renderNetworks: function ui_rn(networks) {
-    var networksDOM = document.getElementById('networks');
-    networksDOM.innerHTML = '';
-    var networksShown = [];
-    networks.sort(function(a, b) {
-      return b.relSignalStrength - a.relSignalStrength;
-    });
-
-
-    // Add detected networks
-    for (var i = 0; i < networks.length; i++) {
-      // Retrieve the network
-      var network = networks[i];
-      // Check if is shown
-      if (networksShown.indexOf(network.ssid) == -1) {
-        // Create dom elements
-        var li = document.createElement('li');
-        var icon = document.createElement('aside');
-        var ssidp = document.createElement('p');
-        var small = document.createElement('p');
-        // Set Icon
-        icon.classList.add('pack-end');
-        icon.classList.add('icon');
-        var level = Math.min(Math.floor(network.relSignalStrength / 20), 4);
-        icon.classList.add('wifi-signal' + level);
-        // Set SSID
-        ssidp.textContent = network.ssid;
-        li.dataset.ssid = network.ssid;
-        // Show authentication method
-        var keys = network.capabilities;
-        if (WifiManager.isConnectedTo(network)) {
-          small.textContent = _('shortStatus-connected');
-        } else {
-          if (keys && keys.length) {
-            small.textContent = keys.join(', ');
-          } else {
-            small.textContent = _('securityOpen');
-          }
-        }
-        // Update list of shown netwoks
-        networksShown.push(network.ssid);
-        // Append the elements to li
-        li.setAttribute('id', network.ssid);
-        li.appendChild(icon);
-        li.appendChild(ssidp);
-        li.appendChild(small);
-        // Append to DOM
-        if (WifiManager.isConnectedTo(network)) {
-          networksDOM.insertBefore(li, networksDOM.firstChild);
-        } else {
-          networksDOM.appendChild(li);
-        }
-      }
-    }
-  },
-
-  renderNetworkConfiguration: function uim_rnc(ssid, callback) {
-    if (callback) {
-      callback();
-    }
-  },
-
-  updateNetworkStatus: function uim_uns(ssid, status) {
-    if (!document.getElementById(ssid))
-      return;
-
-    document.getElementById(ssid).
-      querySelector('p:last-child').innerHTML = _('shortStatus-' + status);
-  },
-
-  updateDataConnectionStatus: function uim_udcs(status) {
+  updateDataConnectionStatus: function ui_udcs(status) {
     this.dataConnectionSwitch.checked = status;
   }
+
 };
 
 function toCamelCase(str) {

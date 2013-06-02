@@ -9,10 +9,10 @@ var BatteryManager = {
   TRANSITION_FRACTION: 0.30,
 
   AUTO_SHUTDOWN_LEVEL: 0.02,
+  EMPTY_BATTERY_LEVEL: 0.1,
 
+  _battery: window.navigator.battery,
   _notification: null,
-  _screenOn: true,
-  _previousLevel: 0,
 
   getAllElements: function bm_getAllElements() {
     this.screen = document.getElementById('screen');
@@ -21,7 +21,7 @@ var BatteryManager = {
   },
 
   checkBatteryDrainage: function bm_checkBatteryDrainage() {
-    var battery = window.navigator.battery;
+    var battery = this._battery;
     if (!battery)
       return;
 
@@ -31,11 +31,12 @@ var BatteryManager = {
 
   init: function bm_init() {
     this.getAllElements();
-    var battery = window.navigator.battery;
+    var battery = this._battery;
     if (battery) {
       // When the device is booted, check if the battery is drained.
       // If so, SleepMenu.startPowerOff() would be called.
-      this.checkBatteryDrainage();
+      window.addEventListener('homescreen-ready',
+                              this.checkBatteryDrainage.bind(this));
 
       battery.addEventListener('levelchange', this);
       battery.addEventListener('chargingchange', this);
@@ -45,42 +46,47 @@ var BatteryManager = {
     ['mousedown', 'swipe'].forEach(function(evt) {
       this.notification.addEventListener(evt, this);
     }, this);
+
+    this._screenOn = true;
+    this._wasEmptyBatteryNotificationDisplayed = false;
+
+    this.displayIfNecessary();
   },
 
   handleEvent: function bm_handleEvent(evt) {
     switch (evt.type) {
       case 'screenchange':
         this._screenOn = evt.detail.screenEnabled;
+        this.displayIfNecessary();
         break;
 
       case 'levelchange':
-        var battery = window.navigator.battery;
+        var battery = this._battery;
         if (!battery)
           return;
 
         this.checkBatteryDrainage();
-
-        var level = Math.min(100, Math.round(battery.level * 100));
-
-        if (this._screenOn) {
-          this.notification.dataset.level = level;
-
-          if (!battery.charging && this._previousLevel != level && level == 10)
-            this.display();
-        }
-
-        this._previousLevel = level;
+        this.displayIfNecessary();
 
         PowerSaveHandler.onBatteryChange();
         break;
       case 'chargingchange':
         PowerSaveHandler.onBatteryChange();
 
-        var battery = window.navigator.battery;
+        var battery = this._battery;
         // We turn the screen on if needed in order to let
         // the user knows the device is charging
-        if (battery && battery.charging && !this._screenOn)
-          ScreenManager.turnScreenOn();
+
+        if (battery && battery.charging) {
+          this.hide();
+          this._wasEmptyBatteryNotificationDisplayed = false;
+
+          if (!this._screenOn) {
+            ScreenManager.turnScreenOn();
+          }
+        } else {
+          this.displayIfNecessary();
+        }
         break;
 
       case 'mousedown':
@@ -92,23 +98,46 @@ var BatteryManager = {
     }
   },
 
-  display: function bm_display() {
-    var overlayClass = this.overlay.classList;
-    var notificationClass = this.notification.classList;
+  _shouldWeDisplay: function bm_shouldWeDisplay() {
+    var battery = this._battery;
+    if (!battery) {
+      return false;
+    }
 
-    overlayClass.add('battery');
-    notificationClass.add('visible');
+    return (!this._wasEmptyBatteryNotificationDisplayed &&
+        !battery.charging &&
+        battery.level <= this.EMPTY_BATTERY_LEVEL &&
+        this._screenOn);
+  },
+
+  displayIfNecessary: function bm_display() {
+    if (! this._shouldWeDisplay()) {
+      return;
+    }
+
+    // we know it's here, it's checked in shouldWeDisplay()
+    var level = this._battery.level;
+
+    this.overlay.classList.add('battery');
+
     this._toasterGD.startDetecting();
+    this._wasEmptyBatteryNotificationDisplayed = true;
 
-    if (this._toasterTimeout)
+    if (this._toasterTimeout) {
       clearTimeout(this._toasterTimeout);
+    }
 
-    this._toasterTimeout = setTimeout((function() {
-      overlayClass.remove('battery');
-      notificationClass.remove('visible');
+    this._toasterTimeout = setTimeout(this.hide.bind(this),
+        this.TOASTER_TIMEOUT);
+  },
+
+  hide: function bm_hide() {
+    var overlayCss = this.overlay.classList;
+    if (overlayCss.contains('battery')) {
+      this.overlay.classList.remove('battery');
       this._toasterTimeout = null;
       this._toasterGD.stopDetecting();
-    }).bind(this), this.TOASTER_TIMEOUT);
+    }
   },
 
   // Swipe handling
@@ -132,9 +161,8 @@ var BatteryManager = {
     var self = this;
     this.notification.addEventListener('animationend', function animationend() {
       self.notification.removeEventListener('animationend', animationend);
-      self.notification.classList.remove('visible');
       self.notification.classList.remove('disappearing');
-      self.overlay.classList.remove('battery');
+      self.hide();
     });
     this.notification.classList.add('disappearing');
   }
@@ -150,6 +178,8 @@ var PowerSaveHandler = (function PowerSaveHandler() {
     'bluetooth.enabled' : false,
     'geolocation.enabled' : false
   };
+
+  var _powerSaveEnabledLock = false;
 
   function init() {
     SettingsListener.observe('powersave.enabled', false,
@@ -201,6 +231,8 @@ var PowerSaveHandler = (function PowerSaveHandler() {
     };
 
     setMozSettings(settingsToSet);
+
+    _powerSaveEnabledLock = false;
   }
 
   function disablePowerSave() {
@@ -215,8 +247,27 @@ var PowerSaveHandler = (function PowerSaveHandler() {
     setMozSettings(settingsToSet);
   }
 
+  function showPowerSavingNotification() {
+    var _ = navigator.mozL10n.get;
+
+    var clickCB = function() {
+      var activityRequest = new MozActivity({
+        name: 'configure',
+        data: {
+          target: 'device',
+          section: 'battery'
+        }
+      });
+    };
+
+    NotificationHelper.send(_('notification-powersaving-mode-on-title'),
+                            _('notification-powersaving-mode-on-description'),
+                            'style/icons/System.png',
+                            clickCB);
+  }
+
   function onBatteryChange() {
-    var battery = window.navigator.battery;
+    var battery = BatteryManager._battery;
 
     if (battery.charging) {
       if (_powerSaveEnabled)
@@ -229,10 +280,14 @@ var PowerSaveHandler = (function PowerSaveHandler() {
       function getThreshold(value) {
         if (battery.level <= value && !_powerSaveEnabled) {
           setMozSettings({'powersave.enabled' : true});
+          if (!_powerSaveEnabledLock) {
+            showPowerSavingNotification();
+            _powerSaveEnabledLock = true;
+          }
           return;
         }
 
-        if (battery.level > value && _powerSaveEnabled) {
+        if (value != -1 && battery.level > value && _powerSaveEnabled) {
           setMozSettings({'powersave.enabled' : false});
           return;
         }

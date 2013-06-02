@@ -13,17 +13,18 @@ function formatTime(secs) {
   if (isNaN(secs))
     return;
 
+  secs = Math.floor(secs);
+
   var formatedTime;
-  var seconds = parseInt(secs % 60, 10);
-  var minutes = parseInt(secs / 60) % 60;
-  var hours = parseInt(secs / 3600) % 24;
+  var seconds = secs % 60;
+  var minutes = Math.floor(secs / 60) % 60;
+  var hours = Math.floor(secs / 3600);
 
   if (hours === 0) {
     formatedTime =
       (minutes < 10 ? '0' + minutes : minutes) + ':' +
       (seconds < 10 ? '0' + seconds : seconds);
   } else {
-
     formatedTime =
       (hours < 10 ? '0' + hours : hours) + ':' +
       (minutes < 10 ? '0' + minutes : minutes) + ':' +
@@ -39,9 +40,6 @@ function formatTime(secs) {
 // DIV(parent) - overflow: hidden;
 // IMG(child) - position: absolute;
 function cropImage(evt) {
-  // Make sure we never have more than one of these registered on an image
-  evt.target.removeEventListener('load', cropImage);
-
   var image = evt.target;
   var style = image.style;
 
@@ -67,39 +65,15 @@ function cropImage(evt) {
 // If the metadata music file includes embedded cover art,
 // use the thumbnail cache or extract it from the file,
 // create a blob: url for it, and set it on the specified img element.
-function createAndSetCoverURL(img, fileinfo, isCached) {
-  var url;
-
-  function setImageURL() {
-    img.addEventListener('load', function revoke() {
-      URL.revokeObjectURL(url);
-      img.removeEventListener('load', revoke);
-    });
-    img.src = url;
-  }
-
-  function createCoverURL(file) {
-    var cover = file.slice(fileinfo.metadata.picture.start,
-                           fileinfo.metadata.picture.end,
-                           fileinfo.metadata.picture.type);
-    url = URL.createObjectURL(cover);
-  }
-
-  if (isCached) {
-    url = URL.createObjectURL(fileinfo.metadata.thumbnail);
-    setImageURL();
-  } else {
-    // if fileinfo has a blob, we can just use it to get the cover image
-    // this should happen when the player receives a blob from web activity
-    if (fileinfo.blob) {
-      createCoverURL(fileinfo.blob);
-      setImageURL();
+function displayAlbumArt(img, fileinfo) {
+  getThumbnailURL(fileinfo, function(url) {
+    if (!url)
       return;
-    }
-
-    musicdb.getFile(fileinfo.name, function(file) {
-      createCoverURL(file);
-      setImageURL();
+    img.src = url;
+    // When the image loads make sure it is positioned correctly
+    img.addEventListener('load', function revoke(event) {
+      img.removeEventListener('load', revoke);
+      cropImage(event);
     });
-  }
+  });
 }

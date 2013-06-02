@@ -29,25 +29,43 @@ var AttentionScreen = {
 
   init: function as_init() {
     window.addEventListener('mozbrowseropenwindow', this.open.bind(this), true);
+
     window.addEventListener('mozbrowserclose', this.close.bind(this), true);
     window.addEventListener('mozbrowsererror', this.close.bind(this), true);
+
     window.addEventListener('keyboardchange', this.resize.bind(this), true);
     window.addEventListener('keyboardhide', this.resize.bind(this), true);
 
     this.bar.addEventListener('click', this.show.bind(this));
+
     window.addEventListener('home', this.hide.bind(this));
     window.addEventListener('holdhome', this.hide.bind(this));
+    window.addEventListener('appwillopen', this.appOpenHandler.bind(this));
+
+    window.addEventListener('will-unlock', this.screenUnlocked.bind(this));
   },
 
   resize: function as_resize(evt) {
-    if (!this.isFullyVisible())
-      return;
-
     if (evt.type == 'keyboardchange') {
+      if (!this.isFullyVisible())
+        return;
+
+      var keyboardHeight = KeyboardManager.getHeight();
       this.attentionScreen.style.height =
-        window.innerHeight - evt.detail.height + 'px';
+        window.innerHeight - keyboardHeight + 'px';
     } else if (evt.type == 'keyboardhide') {
-      this.attentionScreen.style.height = window.innerHeight + 'px';
+      // We still need to reset the height property even when the attention
+      // screen is not fully visible, or it will overrides the height
+      // we defined with #attention-screen.status-mode
+      this.attentionScreen.style.height = '';
+    }
+  },
+
+  appOpenHandler: function as_appHandler(evt) {
+    // If the user presses the home button we will still hide the attention
+    // screen. But in the case of an app crash we'll keep it fully open
+    if (!evt.detail.isHomescreen) {
+      this.hide();
     }
   },
 
@@ -101,6 +119,9 @@ var AttentionScreen = {
     // alternatively, if the newly appended frame is the visible frame
     // and we are in the status bar mode, expend to full screen mode.
     if (!this.isVisible()) {
+      // Attention screen now only support portrait mode.
+      screen.mozLockOrientation('portrait-primary');
+
       this.attentionScreen.classList.add('displayed');
       this.mainScreen.classList.add('attention');
       this.dispatchEvent('attentionscreenshow', {
@@ -179,6 +200,11 @@ var AttentionScreen = {
         { origin: this.attentionScreen.lastElementChild.dataset.frameOrigin });
     }
 
+    // Restore the orientation of current displayed app
+    var currentApp = WindowManager.getDisplayedApp();
+    if (currentApp)
+      WindowManager.setOrientationForApp(currentApp);
+
     this.attentionScreen.classList.remove('displayed');
     this.mainScreen.classList.remove('attention');
     this.dispatchEvent('attentionscreenhide', { origin: origin });
@@ -186,23 +212,23 @@ var AttentionScreen = {
 
   // expend the attention screen overlay to full screen
   show: function as_show() {
+    // Attention screen now only support portrait mode.
+    screen.mozLockOrientation('portrait-primary');
+
     // leaving "status-mode".
     this.attentionScreen.classList.remove('status-mode');
     // there shouldn't be a transition from "status-mode" to "active-statusbar"
     this.attentionScreen.style.transition = 'none';
 
     var self = this;
-    window.addEventListener('MozAfterPaint', function finishAfterPaint() {
-      window.removeEventListener('MozAfterPaint', finishAfterPaint);
-      setTimeout(function nextLoop() {
-        self.attentionScreen.style.transition = '';
+    setTimeout(function nextTick() {
+      self.attentionScreen.style.transition = '';
 
-        // leaving "active-statusbar" mode,
-        // with a transform: translateY() slide down transition.
-        self.mainScreen.classList.remove('active-statusbar');
-        self.dispatchEvent('status-inactive', {
-          origin: self.attentionScreen.lastElementChild.dataset.frameOrigin
-        });
+      // leaving "active-statusbar" mode,
+      // with a transform: translateY() slide down transition.
+      self.mainScreen.classList.remove('active-statusbar');
+      self.dispatchEvent('status-inactive', {
+        origin: self.attentionScreen.lastElementChild.dataset.frameOrigin
       });
     });
   },
@@ -213,15 +239,21 @@ var AttentionScreen = {
     if (!this.isFullyVisible())
       return;
 
+    // Restore the orientation of current displayed app
+    var currentApp = WindowManager.getDisplayedApp();
+
+    if (currentApp)
+      WindowManager.setOrientationForApp(currentApp);
+
+    // entering "active-statusbar" mode,
+    // with a transform: translateY() slide up transition.
+    this.mainScreen.classList.add('active-statusbar');
+
     // The only way to hide attention screen is the home/holdhome event.
     // So we don't fire any origin information here.
     // The expected behavior is restore homescreen visibility to 'true'
     // in the Window Manager.
     this.dispatchEvent('status-active');
-
-    // entering "active-statusbar" mode,
-    // with a transform: translateY() slide up transition.
-    this.mainScreen.classList.add('active-statusbar');
 
     var attentionScreen = this.attentionScreen;
     attentionScreen.addEventListener('transitionend', function trWait() {
@@ -252,6 +284,13 @@ var AttentionScreen = {
     if (origin === frameOrigin) {
       this.show();
     }
+  },
+
+  screenUnlocked: function as_screenUnlocked() {
+    // If the app behind the soon-to-be-unlocked lockscreen has an
+    // attention screen we should display it
+    var app = WindowManager.getCurrentDisplayedApp();
+    this.showForOrigin(app.origin);
   },
 
   getAttentionScreenOrigins: function as_getAttentionScreenOrigins() {

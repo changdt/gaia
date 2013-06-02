@@ -1,10 +1,8 @@
-requireApp('calendar/test/unit/helper.js', function() {
-  requireLib('responder.js');
-  requireLib('timespan.js');
-  requireLib('store/event.js');
-  requireLib('store/busytime.js');
-  requireLib('store/alarm.js');
-});
+requireLib('responder.js');
+requireLib('timespan.js');
+requireLib('store/event.js');
+requireLib('store/busytime.js');
+requireLib('store/alarm.js');
 
 suite('store/busytime', function() {
 
@@ -125,12 +123,12 @@ suite('store/busytime', function() {
         }
 
         subject.count(function(err, value) {
-          alarmCount = value;
+          busytimeCount = value;
           next();
         });
 
         alarmStore.count(function(err, value) {
-          busytimeCount = value;
+          alarmCount = value;
           next();
         });
       });
@@ -323,7 +321,7 @@ suite('store/busytime', function() {
 
       trans.oncomplete = function() {
         done();
-      }
+      };
     });
 
     setup(function(done) {

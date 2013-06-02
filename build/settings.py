@@ -12,8 +12,6 @@ settings = {
  "accessibility.invert": False,
  "accessibility.screenreader": False,
  "alarm.enabled": False,
- "alert-sound.enabled": True,
- "alert-vibration.enabled": True,
  "app.reportCrashes": "ask",
  "app.update.interval": 86400,
  "audio.volume.alarm": 15,
@@ -23,9 +21,12 @@ settings = {
  "audio.volume.notification": 15,
  "audio.volume.tts": 15,
  "audio.volume.telephony": 5,
+ "audio.volume.cemaxvol": 11,
  "bluetooth.enabled": False,
+ "bluetooth.debugging.enabled": False,
+ "bootshutdown.sound.enabled": True,
  "camera.shutter.enabled": True,
- "debug.dev-mode": False,
+ "clear.remote-windows.data": False,
  "debug.grid.enabled": False,
  "debug.oop.disabled": False,
  "debug.fps.enabled": False,
@@ -38,9 +39,10 @@ settings = {
  "deviceinfo.os": "",
  "deviceinfo.platform_build_id": "",
  "deviceinfo.platform_version": "",
+ "deviceinfo.product_model": "",
  "deviceinfo.software": "",
  "deviceinfo.update_channel": "",
- "devtools.debugger.remote-enabled": False,
+ "device.storage.writable.name": "sdcard",
  "gaia.system.checkForUpdates": False,
  "geolocation.enabled": True,
  "keyboard.layouts.english": True,
@@ -53,12 +55,17 @@ settings = {
  "keyboard.layouts.pinyin": False,
  "keyboard.layouts.greek": False,
  "keyboard.layouts.japanese": False,
+ "keyboard.layouts.polish": False,
  "keyboard.layouts.portuguese": False,
  "keyboard.layouts.spanish": False,
- "keyboard.vibration": True,
+ "keyboard.layouts.catalan": False,
+ "keyboard.vibration": False,
  "keyboard.clicksound": False,
+ "keyboard.autocorrect": True,
  "keyboard.wordsuggestion": True,
+ "keyboard.current": "en",
  "language.current": "en-US",
+ "layers.draw-borders": False,
  "lockscreen.passcode-lock.code": "0000",
  "lockscreen.passcode-lock.timeout": 0,
  "lockscreen.passcode-lock.enabled": False,
@@ -66,17 +73,20 @@ settings = {
  "lockscreen.enabled": True,
  "lockscreen.locked": True,
  "lockscreen.unlock-sound.enabled": False,
- "operatorvariant.mcc": 0,
- "operatorvariant.mnc": 0,
+ "mail.sent-sound.enabled": True,
+ "message.sent-sound.enabled": True,
+ "operatorvariant.mcc": "0",
+ "operatorvariant.mnc": "0",
  "ril.iccInfo.mbdn":"",
  "ril.sms.strict7BitEncoding.enabled": False,
  "ril.cellbroadcast.searchlist": "",
  "debug.console.enabled": False,
  "phone.ring.keypad": True,
  "powersave.enabled": False,
- "powersave.threshold": 0,
+ "powersave.threshold": -1,
  "privacy.donottrackheader.enabled": False,
- "ril.callwaiting.enabled": True,
+ "ril.callwaiting.enabled": None,
+ "ril.cf.enabled": False,
  "ril.data.enabled": False,
  "ril.data.apn": "",
  "ril.data.carrier": "",
@@ -97,6 +107,8 @@ settings = {
  "ril.mms.mmsproxy": "",
  "ril.mms.passwd": "",
  "ril.mms.user": "",
+ "ril.mms.retrieval_mode": "automatic-home",
+ "dom.mms.operatorSizeLimitation": 0,
  "ril.radio.preferredNetworkType": "",
  "ril.radio.disabled": False,
  "ril.supl.apn": "",
@@ -106,10 +118,10 @@ settings = {
  "ril.supl.passwd": "",
  "ril.supl.user": "",
  "ril.sms.strict7BitEncoding.enabled": False,
- "ring.enabled": True,
  "screen.automatic-brightness": True,
  "screen.brightness": 1,
  "screen.timeout": 60,
+ "telephony.speaker.enabled": False,
  "tethering.usb.enabled": False,
  "tethering.usb.ip": "192.168.0.1",
  "tethering.usb.prefix": "24",
@@ -129,11 +141,16 @@ settings = {
  "time.timezone": None,
  "ums.enabled": False,
  "ums.mode": 0,
+ "ums.volume.sdcard.enabled": True,
+ "ums.volume.extsdcard.enabled": False,
  "vibration.enabled": True,
  "wifi.enabled": True,
+ "wifi.screen_off_timeout": 600000,
  "wifi.disabled_by_wakelock": False,
  "wifi.notification": False,
- "icc.displayTextTimeout": 10000
+ "wifi.connect_via_settings": False,
+ "icc.displayTextTimeout": 40000,
+ "icc.inputTextTimeout": 40000
 }
 
 def main():
@@ -145,7 +162,10 @@ def main():
     parser.add_option("-o", "--output", help="specify the name of the output file")
     parser.add_option("-w", "--wallpaper", help="specify the name of the wallpaper file")
     parser.add_option("-v", "--verbose", help="increase output verbosity", action="store_true")
-    parser.add_option(      "--noftu", help="bypass the ftu app")
+    parser.add_option(      "--noftu", help="bypass the ftu app", action="store_true")
+    parser.add_option(      "--locale", help="specify the default locale to use")
+    parser.add_option(      "--hidpi", help="specify if the target device has hidpi screen")
+    parser.add_option(      "--enable-debugger", help="enable remote debugger (and ADB for VARIANT=user builds)", action="store_true")
     (options, args) = parser.parse_args(sys.argv[1:])
 
     verbose = options.verbose
@@ -168,7 +188,12 @@ def main():
     if options.wallpaper:
         wallpaper_filename = options.wallpaper
     else:
-        wallpaper_filename = "build/wallpaper.jpg"
+        if options.hidpi:
+            wallpaper_filename = "build/wallpaper@2x.jpg"
+        else:
+            wallpaper_filename = "build/wallpaper.jpg"
+
+    enable_debugger = (options.enable_debugger == True)
 
     if verbose:
         print "Console:", options.console
@@ -176,6 +201,7 @@ def main():
         print "Ftu URL:", ftu_url
         print "Setting Filename:",settings_filename
         print "Wallpaper Filename:", wallpaper_filename
+        print "Enable Debugger:", enable_debugger
 
     # Set the default console output
     if options.console:
@@ -187,6 +213,18 @@ def main():
     # Set the ftu manifest URL
     if not options.noftu:
         settings["ftu.manifestURL"] = ftu_url
+
+    # Set the default locale
+    if options.locale:
+        settings["language.current"] = options.locale
+        keyboard_layouts_name = "shared/resources/keyboard_layouts.json"
+        keyboard_layouts = json.load(open(keyboard_layouts_name))
+        if options.locale in keyboard_layouts:
+            default_layout = keyboard_layouts[options.locale]
+            settings["keyboard.layouts.english"] = False
+            settings["keyboard.layouts.{0}".format(default_layout)] = True
+
+    settings["devtools.debugger.remote-enabled"] = enable_debugger
 
     # Grab wallpaper.jpg and convert it into a base64 string
     wallpaper_file = open(wallpaper_filename, "rb")

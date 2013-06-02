@@ -6,18 +6,22 @@
 *~
 manifest.appcache
 
-/apps/system/camera
-/apps/settings/resources/gaia_commit.txt
+/apps/calendar/js/presets.js
 /apps/homescreen/js/init.json
 /apps/homescreen/js/hiddenapps.js
+/apps/settings/js/hiddenapps.js
 /apps/costcontrol/js/config.json
 /apps/sms/js/blacklist.json
 /test_apps/test-agent/test/config.json
 /apps/dialer/contacts
+/apps/browser/js/init.json
 
 /apps/*/test/unit/_sandbox.html
 /apps/*/test/unit/_proxy.html
 /apps/*/shared
+/apps/settings/resources/support.json
+/apps/settings/resources/sensors.json
+/apps/settings/resources/icc.json
 /test_apps/*/test/unit/_sandbox.html
 /test_apps/*/test/unit/_proxy.html
 /showcase_apps/*/test/unit/_sandbox.html
@@ -37,6 +41,6 @@ manifest.appcache
 
 /tools/xpcwindow/vendor/
 
-/locales/*
-
 /outoftree_apps/
+
+/distribution/

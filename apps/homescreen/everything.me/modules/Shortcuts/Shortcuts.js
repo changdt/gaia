@@ -12,12 +12,11 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
         
         elList = Evme.$("#shortcuts-items", el);
         
-        scroll = new Scroll(Evme.$("#shortcuts-list", el), {
-            "hScroll": false,
-            "checkDOMChanges": false,
-            "onBeforeScrollMove": function onBeforeScrollMove(e){ swiped = true; el.classList.add("swiping"); },
-            "onBeforeScrollEnd": function onBeforeScrollEnd(){ swiped = false; el.classList.remove("swiping"); }
-        });
+        scroll = new Scroll(Evme.$("#shortcuts-list", el));
+        
+        if (navigator.mozSettings) {
+          navigator.mozSettings.addObserver('language.current', onLanguageChange);
+        }
         
         Evme.EventHandler.trigger(NAME, "init");
     };
@@ -89,8 +88,6 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
         }
         
         elList.appendChild(docFrag);
-        
-        self.refreshScroll();
     };
     
     this.get = function get() {
@@ -103,6 +100,16 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
             list.push(shortcuts[i].getQuery());
         }
         return list;
+    };
+    
+    this.getShortcutByKey = function getShortcutByKey(key) {
+        for (var i=0, shortcut; shortcut = shortcuts[i++];) {
+            if (shortcut.getQuery() === key || shortcut.getExperience() == key) {
+              return shortcut;
+            }
+        }
+        
+        return null;
     };
     
     this.orderByElements = function orderByElements() {
@@ -125,7 +132,7 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
         var id = shortcut.getId();
         
         for (var i=0; i<shortcuts.length; i++) {
-            if (shortcuts[i].getId() == id) {
+            if (shortcuts[i].getId() === id) {
                 shortcuts.splice(i, 1);
                 return true;
             }
@@ -134,9 +141,6 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
         return false;
     };
     
-    this.refreshScroll = function refreshScroll() {
-        scroll && scroll.refresh();
-    };
     this.enableScroll = function enableScroll() {
         scroll && scroll.enable();
     };
@@ -181,7 +185,6 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
 
     this.show = function show(bReport) {
         visible = true;
-        window.setTimeout(self.refreshScroll, 100);
         cbShow(bReport);
     };
 
@@ -207,6 +210,12 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
     this.enabled = function _enabled() {
         return enabled;
     };
+    
+    function onLanguageChange() {
+      for (var i=0, shortcut; shortcut=shortcuts[i++];) {
+        shortcut.refreshImage();
+      }
+    }
     
     function setShortcutsDesign() {
         if (setDesign) return;
@@ -241,29 +250,35 @@ Evme.Shortcuts = new function Evme_Shortcuts() {
 }
 
 Evme.Shortcut = function Evme_Shortcut() {
-    var NAME = "Shortcut", self = this, cfg = null, id = "id"+Math.round(Math.random()*10000),
-        el = null, elThumb = null,  index = -1, query = "", image = "", imageLoadingRetry = 0,
+    var NAME = "Shortcut", self = this,
+        cfg = null, id = '',
+        el = null, elThumb = null, index = -1, experienceId = '', query = '',
         timeoutHold = null, removed = false,
-        posStart = [0, 0], timeStart = 0, fingerMoved = true;
+        posStart = [0, 0], timeStart = 0, fingerMoved = true,
         
-    var THRESHOLD = 5,
+        THRESHOLD = 5,
         TIME_BEFORE_CONTEXT = 600;
     
     this.init = function init(_cfg, _index) {
         cfg = _cfg;
+        id = 'shrt-' + Evme.Utils.uuid();
         index = _index;
+        experienceId = cfg.experienceId;
         query = cfg.query;
         
-        if (!cfg.query) {
+        if (!query && !experienceId) {
             return null;
         }
         
-        el = Evme.$create('li', {'class': "shortcut", 'query': query}, 
+        el = Evme.$create('li', {
+                            'class': 'shortcut',
+                            'data-query': self.getName(),
+                            'data-experienceId': experienceId
+                          },
                             '<span class="thumb"></span>' +
-                            '<b>' + cfg.query + '</b>' +
                             '<span class="remove"></span>'
                         );
-                        
+            
         elThumb = Evme.$(".thumb", el)[0];
         
         self.setImage(cfg.appIds);
@@ -279,14 +294,12 @@ Evme.Shortcut = function Evme_Shortcut() {
             });
         }
         
-        Evme.$(".remove", el, function onItem(elRemove) {
-            elRemove.addEventListener("touchstart", function onClick(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                
-                self.remove(e, false);
-                onRemove(e);
-            });
+        Evme.$(".remove", el)[0].addEventListener("touchstart", function onClick(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            self.remove(e, false);
+            onRemove(e);
         });
         
         return el;
@@ -294,9 +307,15 @@ Evme.Shortcut = function Evme_Shortcut() {
     
     this.setImage = function setImage(shortcutIcons) {
         if (elThumb && shortcutIcons && shortcutIcons.length > 0) {
-            var elIconGroup = Evme.IconGroup.get(shortcutIcons);
-            elThumb.appendChild(elIconGroup);
+            var elIconGroup = Evme.IconGroup.get(shortcutIcons, self.getName(), function onReady(elCanvas) {
+              elThumb.innerHTML = '';
+              elThumb.appendChild(elCanvas);
+            });
         }
+    };
+    
+    this.refreshImage = function refreshImage() {
+        cfg.appIds && self.setImage(cfg.appIds);
     };
     
     this.remove = function remove(e, isFromOutside) {
@@ -308,11 +327,27 @@ Evme.Shortcut = function Evme_Shortcut() {
         Evme.$remove(el);
     };
     
+    this.getName = function getName() {
+        var name = query;
+        
+        if (experienceId) {
+            var l10nkey = 'id-' + Evme.Utils.shortcutIdToKey(experienceId),
+                translatedExperience = Evme.Utils.l10n(NAME, l10nkey);
+            
+            if (translatedExperience) {
+              name = translatedExperience;
+            }
+        }
+        
+        return name;
+    };
+    
     this.getData = function getData() { return cfg; };
     this.getElement = function getElement() { return el; };
     this.getThumb = function getThumb() { return elThumb; };
     this.getId = function getId() { return id; };
     this.getQuery = function getQuery() { return query; };
+    this.getExperience = function getExperience() { return experienceId; };
     this.isCustom = function isCustom() { return cfg.isCustom; };
     
     function onRemove(e) {

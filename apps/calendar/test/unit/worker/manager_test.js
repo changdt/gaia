@@ -1,6 +1,4 @@
-requireApp('calendar/test/unit/helper.js', function() {
-  requireLib('worker/manager.js');
-});
+requireLib('worker/manager.js');
 
 /**
  * This test should over the basics of
@@ -26,7 +24,7 @@ suite('worker/manager', function() {
 
       var self = this;
       this.postMessage = function(msg) {
-        setTimeout(function(){handler.call(self, msg);}, 10);
+        setTimeout(function() {handler.call(self, msg);}, 10);
       };
     };
   }
@@ -91,7 +89,7 @@ suite('worker/manager', function() {
         self.respond([data.id + ' end', 'response']);
       }
     }
-    var obj = {prop: "value"};
+    var obj = {prop: 'value'};
 
     setup(function() {
       subject.Worker = MockWorker(mockHandler);

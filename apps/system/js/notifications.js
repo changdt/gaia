@@ -39,7 +39,7 @@
 }());
 
 var NotificationScreen = {
-  TOASTER_TIMEOUT: 1200,
+  TOASTER_TIMEOUT: 5000,
   TRANSITION_SPEED: 1.8,
   TRANSITION_FRACTION: 0.30,
 
@@ -50,7 +50,6 @@ var NotificationScreen = {
 
   lockscreenPreview: true,
   silent: false,
-  alerts: true,
   vibrates: true,
 
   init: function ns_init() {
@@ -80,6 +79,7 @@ var NotificationScreen = {
     window.addEventListener('utilitytrayshow', this);
     window.addEventListener('unlock', this.clearLockScreen.bind(this));
     window.addEventListener('mozvisibilitychange', this);
+    window.addEventListener('foreground', this.handleAppopen.bind(this));
 
     this._sound = 'style/notifications/ringtones/notifier_exclamation.ogg';
 
@@ -121,6 +121,17 @@ var NotificationScreen = {
     }
   },
 
+  handleAppopen: function ns_handleAppopen(evt) {
+    var manifestURL = evt.detail.manifestURL,
+        selector = '[data-manifest-u-r-l="' + manifestURL + '"]';
+
+    var nodes = this.container.querySelectorAll(selector);
+
+    for (var i = nodes.length - 1; i >= 0; i--) {
+      this.closeNotification(nodes[i]);
+    }
+  },
+
   // Swipe handling
   mousedown: function ns_mousedown(evt) {
     if (!evt.target.dataset.notificationID)
@@ -129,9 +140,6 @@ var NotificationScreen = {
     evt.preventDefault();
     this._notification = evt.target;
     this._containerWidth = this.container.clientWidth;
-
-    this._notification.style.MozTransition = '';
-    this._notification.style.width = evt.target.parentNode.clientWidth + 'px';
   },
 
   swipe: function ns_swipe(evt) {
@@ -141,7 +149,11 @@ var NotificationScreen = {
     var farEnough = Math.abs(distance) >
       this._containerWidth * this.TRANSITION_FRACTION;
 
-    if (!(farEnough || fastEnough)) {
+    // We only remove the notification if the swipe was
+    // - left to right
+    // - far or fast enough
+    if ((distance > 0) ||
+        !(farEnough || fastEnough)) {
       // Werent far or fast enough to delete, restore
       delete this._notification;
       return;
@@ -168,6 +180,7 @@ var NotificationScreen = {
         toaster.style.MozTransition = '';
         toaster.style.MozTransform = '';
         toaster.classList.remove('displayed');
+        toaster.classList.remove('disappearing');
 
         setTimeout(function nextLoop() {
           toaster.style.display = 'block';
@@ -198,9 +211,22 @@ var NotificationScreen = {
   updateTimestamps: function ns_updateTimestamps() {
     var timestamps = document.getElementsByClassName('timestamp');
     for (var i = 0, l = timestamps.length; i < l; i++) {
-      timestamps[i].textContent = navigator.mozL10n.DateTimeFormat()
-        .fromNow(new Date(timestamps[i].dataset.timestamp), true);
+      timestamps[i].textContent =
+        this.prettyDate(new Date(timestamps[i].dataset.timestamp));
     }
+  },
+
+  /**
+   * Display a human-readable relative timestamp.
+   */
+  prettyDate: function prettyDate(time) {
+    var date;
+    if (navigator.mozL10n) {
+      date = navigator.mozL10n.DateTimeFormat().fromNow(time, true);
+    } else {
+      date = time.toLocaleFormat();
+    }
+    return date;
   },
 
   addNotification: function ns_addNotification(detail) {
@@ -208,20 +234,23 @@ var NotificationScreen = {
     notificationNode.className = 'notification';
 
     notificationNode.dataset.notificationID = detail.id;
+    notificationNode.dataset.manifestURL = detail.manifestURL;
 
     if (detail.icon) {
       var icon = document.createElement('img');
       icon.src = detail.icon;
       notificationNode.appendChild(icon);
       this.toasterIcon.src = detail.icon;
+      this.toasterIcon.hidden = false;
+    } else {
+      this.toasterIcon.hidden = true;
     }
 
     var time = document.createElement('span');
     var timestamp = new Date();
     time.classList.add('timestamp');
     time.dataset.timestamp = timestamp;
-    time.textContent = navigator.mozL10n.DateTimeFormat()
-      .fromNow(timestamp, true);
+    time.textContent = this.prettyDate(timestamp);
     notificationNode.appendChild(time);
 
     var title = document.createElement('div');
@@ -237,12 +266,14 @@ var NotificationScreen = {
 
     this.toasterDetail.textContent = detail.text;
 
-    this.container.appendChild(notificationNode);
+    this.container.insertBefore(notificationNode,
+      this.container.firstElementChild);
     new GestureDetector(notificationNode).startDetecting();
 
     // We turn the screen on if needed in order to let
     // the user see the notification toaster
-    if (!ScreenManager.screenEnabled) {
+    if (typeof(ScreenManager) !== 'undefined' &&
+      !ScreenManager.screenEnabled) {
       ScreenManager.turnScreenOn();
     }
 
@@ -267,13 +298,14 @@ var NotificationScreen = {
 
     // Adding it to the lockscreen if locked and the privacy setting
     // does not prevent it.
-    if (LockScreen.locked && this.lockscreenPreview) {
+    if (typeof(LockScreen) !== 'undefined' &&
+        LockScreen.locked && this.lockscreenPreview) {
       var lockScreenNode = notificationNode.cloneNode(true);
       this.lockScreenContainer.insertBefore(lockScreenNode,
                                this.lockScreenContainer.firstElementChild);
     }
 
-    if (this.alerts && !this.silent) {
+    if (!this.silent) {
       var ringtonePlayer = new Audio();
       ringtonePlayer.src = this._sound;
       ringtonePlayer.mozAudioChannelType = 'notification';
@@ -314,8 +346,15 @@ var NotificationScreen = {
   removeNotification: function ns_removeNotification(notificationID) {
     var notifSelector = '[data-notification-i-d="' + notificationID + '"]';
     var notificationNode = this.container.querySelector(notifSelector);
+    var lockScreenNotificationNode =
+      this.lockScreenContainer.querySelector(notifSelector);
 
-    notificationNode.parentNode.removeChild(notificationNode);
+    if (notificationNode)
+      notificationNode.parentNode.removeChild(notificationNode);
+
+    if (lockScreenNotificationNode)
+      lockScreenNotificationNode.parentNode
+        .removeChild(lockScreenNotificationNode);
     this.updateStatusBarIcon();
   },
 
@@ -364,14 +403,10 @@ SettingsListener.observe(
   NotificationScreen.lockscreenPreview = value;
 });
 
-SettingsListener.observe('alert-sound.enabled', true, function(value) {
-  NotificationScreen.alerts = value;
+SettingsListener.observe('audio.volume.notification', 7, function(value) {
+  NotificationScreen.silent = (value == 0);
 });
 
-SettingsListener.observe('ring.enabled', true, function(value) {
-  NotificationScreen.silent = !value;
-});
-
-SettingsListener.observe('alert-vibration.enabled', true, function(value) {
+SettingsListener.observe('vibration.enabled', true, function(value) {
   NotificationScreen.vibrates = value;
 });

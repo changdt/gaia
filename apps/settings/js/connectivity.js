@@ -8,230 +8,83 @@
  * requiring the full `wifi.js' + `carrier.js' + `bluetooth.js' libraries.
  */
 
-// create a fake mozMobileConnection if required (e.g. desktop browser)
-var gMobileConnection = (function newMobileConnection(window) {
-  var navigator = window.navigator;
-  if (('mozMobileConnection' in navigator) &&
-      navigator.mozMobileConnection &&
-      navigator.mozMobileConnection.data)
-    return navigator.mozMobileConnection;
-
-  var initialized = false;
-  var fakeICCInfo = { shortName: 'Fake Free-Mobile', mcc: 208, mnc: 15 };
-  var fakeNetwork = { shortName: 'Fake Orange F', mcc: 208, mnc: 1 };
-  var fakeVoice = {
-    state: 'notSearching',
-    roaming: true,
-    connected: true,
-    emergencyCallsOnly: false
-  };
-
-  function fakeEventListener(type, callback, bubble) {
-    if (initialized)
-      return;
-
-    // simulates a connection to a data network;
-    setTimeout(function fakeCallback() {
-      initialized = true;
-      callback();
-    }, 5000);
-  }
-
-  return {
-    addEventListener: fakeEventListener,
-    iccInfo: fakeICCInfo,
-    get data() {
-      return initialized ? { network: fakeNetwork } : null;
-    },
-    get voice() {
-      return initialized ? fakeVoice : null;
-    }
-  };
-})(this);
-
-// create a fake mozWifiManager if required (e.g. desktop browser)
-var gWifiManager = (function(window) {
-  var navigator = window.navigator;
-  if ('mozWifiManager' in navigator)
-    return navigator.mozWifiManager;
-
-  /**
-   * fake network list, where each network object looks like:
-   * {
-   *   ssid              : SSID string (human-readable name)
-   *   bssid             : network identifier string
-   *   capabilities      : array of strings (supported authentication methods)
-   *   relSignalStrength : 0-100 signal level (integer)
-   *   connected         : boolean state
-   * }
-   */
-
-  var fakeNetworks = {
-    'Mozilla-G': {
-      ssid: 'Mozilla-G',
-      bssid: 'xx:xx:xx:xx:xx:xx',
-      capabilities: ['WPA-EAP'],
-      relSignalStrength: 67,
-      connected: false
-    },
-    'Livebox 6752': {
-      ssid: 'Livebox 6752',
-      bssid: 'xx:xx:xx:xx:xx:xx',
-      capabilities: ['WEP'],
-      relSignalStrength: 32,
-      connected: false
-    },
-    'Mozilla Guest': {
-      ssid: 'Mozilla Guest',
-      bssid: 'xx:xx:xx:xx:xx:xx',
-      capabilities: [],
-      relSignalStrength: 98,
-      connected: false
-    },
-    'Freebox 8953': {
-      ssid: 'Freebox 8953',
-      bssid: 'xx:xx:xx:xx:xx:xx',
-      capabilities: ['WPA2-PSK'],
-      relSignalStrength: 89,
-      connected: false
-    }
-  };
-
-  function getFakeNetworks() {
-    var request = { result: fakeNetworks };
-
-    setTimeout(function() {
-      if (request.onsuccess) {
-        request.onsuccess();
-      }
-    }, 1000);
-
-    return request;
-  }
-
-  return {
-    // true if the wifi is enabled
-    enabled: false,
-    macAddress: 'xx:xx:xx:xx:xx:xx',
-
-    // enables/disables the wifi
-    setEnabled: function fakeSetEnabled(bool) {
-      var self = this;
-      var request = { result: bool };
-
-      setTimeout(function() {
-        if (request.onsuccess) {
-          request.onsuccess();
-        }
-        if (bool) {
-          self.onenabled();
-        } else {
-          self.ondisabled();
-        }
-      });
-
-      self.enabled = bool;
-      return request;
-    },
-
-    // returns a list of visible/known networks
-    getNetworks: getFakeNetworks,
-    getKnownNetworks: getFakeNetworks,
-
-    // selects a network
-    associate: function fakeAssociate(network) {
-      var self = this;
-      var connection = { result: network };
-      var networkEvent = { network: network };
-
-      setTimeout(function fakeConnecting() {
-        self.connection.network = network;
-        self.connection.status = 'connecting';
-        self.onstatuschange(networkEvent);
-      }, 0);
-
-      setTimeout(function fakeAssociated() {
-        self.connection.network = network;
-        self.connection.status = 'associated';
-        self.onstatuschange(networkEvent);
-      }, 1000);
-
-      setTimeout(function fakeConnected() {
-        network.connected = true;
-        self.connected = network;
-        self.connection.network = network;
-        self.connection.status = 'connected';
-        self.onstatuschange(networkEvent);
-      }, 2000);
-
-      return connection;
-    },
-
-    // forgets a network (disconnect)
-    forget: function fakeForget(network) {
-      var self = this;
-      var networkEvent = { network: network };
-
-      setTimeout(function() {
-        network.connected = false;
-        self.connected = null;
-        self.connection.network = null;
-        self.connection.status = 'disconnected';
-        self.onstatuschange(networkEvent);
-      }, 0);
-    },
-
-    // event listeners
-    onenabled: function(event) {},
-    ondisabled: function(event) {},
-    onstatuschange: function(event) {},
-
-    // returns a network object for the currently connected network (if any)
-    connected: null,
-
-    connection: {
-      status: 'disconnected',
-      network: null
-    }
-  };
-})(this);
-
-// create a fake mozWifiManager if required (e.g. desktop browser)
-var gBluetooth = (function(window) {
-  var navigator = window.navigator;
-  if ('mozBluetooth' in navigator)
-    return navigator.mozBluetooth;
-  return null;
-})(this);
-
-
 // TODO: handle hotspot status
 
 // display connectivity status on the main panel
 var Connectivity = (function(window, document, undefined) {
+  var _initialized = false;
   var _ = navigator.mozL10n.get;
+
+  // in util.js, we fake these device interfaces if they are not exist.
+  var wifiManager = WifiHelper.getWifiManager();
+  var bluetooth = getBluetooth();
+  var mobileConnection = getMobileConnection();
+
+  mobileConnection.addEventListener('datachange', updateCarrier);
+  mobileConnection.addEventListener('cardstatechange', updateCallSettings);
+
+  // XXX if wifiManager implements addEventListener function
+  // we can remove these listener lists.
+  var wifiEnabledListeners = [updateWifi];
+  var wifiDisabledListeners = [updateWifi];
+  var wifiStatusChangeListeners = [updateWifi];
   var settings = Settings.mozSettings;
 
-  function init() {
-    // these listeners are replaced when wifi.js is loaded
-    gWifiManager.onenabled = updateWifi;
-    gWifiManager.ondisabled = updateWifi;
-    gWifiManager.onstatuschange = updateWifi;
-    updateWifi();
+  //
+  // Set wifi.enabled so that it mirrors the state of the hardware.
+  // wifi.enabled is not an ordinary user setting because the system
+  // turns it on and off when wifi goes up and down.
+  //
+  settings.createLock().set({'wifi.enabled': wifiManager.enabled});
 
-    // this event listener is not cleared by carrier.js
-    kCardState = {
-      'pinRequired' : _('simCardLockedMsg'),
-      'pukRequired' : _('simCardLockedMsg'),
-      'absent' : _('noSimCard')
-    };
-    gMobileConnection.addEventListener('datachange', updateCarrier);
-    updateCarrier();
+  //
+  // Now register callbacks to track the state of the wifi hardware
+  //
+  wifiManager.onenabled = function() {
+    dispatchEvent(new CustomEvent('wifi-enabled'));
+    wifiEnabled();
+  };
+  wifiManager.ondisabled = function() {
+    dispatchEvent(new CustomEvent('wifi-disabled'));
+    wifiDisabled();
+  };
+  wifiManager.onstatuschange = wifiStatusChange;
 
-    // this listener is replaced when bluetooth.js is loaded
-    gBluetooth.onadapteradded = updateBluetooth;
-    gBluetooth.ondisabled = updateBluetooth;
+  // Register callbacks to track the state of the bluetooth hardware
+  bluetooth.addEventListener('adapteradded', function() {
+    dispatchEvent(new CustomEvent('bluetooth-adapter-added'));
     updateBluetooth();
+  });
+  bluetooth.addEventListener('disabled', function() {
+    dispatchEvent(new CustomEvent('bluetooth-disabled'));
+    updateBluetooth();
+  });
+
+  window.addEventListener('bluetooth-pairedstatuschanged', updateBluetooth);
+
+  // called when localization is done
+  function init() {
+    if (_initialized) {
+      return;
+    }
+    _initialized = true;
+
+    kCardStateL10nId = {
+      'pinRequired' : 'simCardLockedMsg',
+      'pukRequired' : 'simCardLockedMsg',
+      'networkLocked' : 'simLockedPhone',
+      'serviceProviderLocked' : 'simLockedPhone',
+      'corporateLocked' : 'simLockedPhone',
+      'unknown' : 'unknownSimCardState',
+      'absent' : 'noSimCard',
+      'null' : 'simCardNotReady'
+    };
+
+    updateCarrier();
+    updateCallSettings();
+    updateWifi();
+    updateBluetooth();
+    // register blutooth system message handler
     initSystemMessageHandler();
   }
 
@@ -242,24 +95,51 @@ var Connectivity = (function(window, document, undefined) {
   var wifiDesc = document.getElementById('wifi-desc');
 
   function updateWifi() {
-    // network.connection.status has one of the following values:
-    // connecting, associated, connected, connectingfailed, disconnected.
-    wifiDesc.textContent = _('fullStatus-' +
-        gWifiManager.connection.status,
-        gWifiManager.connection.network);
+    if (!_initialized) {
+      init();
+      return; // init will call updateWifi()
+    }
+
+    if (wifiManager.enabled) {
+      // network.connection.status has one of the following values:
+      // connecting, associated, connected, connectingfailed, disconnected.
+      localize(wifiDesc,
+               'fullStatus-' + wifiManager.connection.status,
+               wifiManager.connection.network);
+    } else {
+      localize(wifiDesc, 'disabled');
+    }
 
     // record the MAC address here because the "Device Information" panel
     // has to display it as well
     if (settings) {
-      settings.createLock().set({ 'deviceinfo.mac': gWifiManager.macAddress });
+      settings.createLock().set({ 'deviceinfo.mac': wifiManager.macAddress });
     }
+  }
+
+  function wifiEnabled() {
+    // Keep the setting in sync with the hardware state.
+    // We need to do this because b2g/dom/wifi/WifiWorker.js can turn
+    // the hardware on and off
+    settings.createLock().set({'wifi.enabled': true});
+    wifiEnabledListeners.forEach(function(listener) { listener(); });
+  }
+
+  function wifiDisabled() {
+    // Keep the setting in sync with the hardware state.
+    settings.createLock().set({'wifi.enabled': false});
+    wifiDisabledListeners.forEach(function(listener) { listener(); });
+  }
+
+  function wifiStatusChange(event) {
+    wifiStatusChangeListeners.forEach(function(listener) { listener(event); });
   }
 
   /**
    * Mobile Connection Manager
    */
 
-  var kCardState; // see init()
+  var kCardStateL10nId; // see init()
   var kDataType = {
     'lte' : '4G LTE',
     'ehrpd': 'CDMA',
@@ -281,12 +161,19 @@ var Connectivity = (function(window, document, undefined) {
   var dataDesc = document.getElementById('data-desc');
 
   function updateCarrier() {
+    // if 'datachange' event happens before init
+    if (!_initialized) {
+      init();
+      return; // init will call updateCarrier()
+    }
+
     var setCarrierStatus = function(msg) {
       var operator = msg.operator || '';
       var data = msg.data || '';
       var text = msg.error ||
         ((data && operator) ? (operator + ' - ' + data) : operator);
       dataDesc.textContent = text;
+      dataDesc.dataset.l10nId = msg.l10nId || '';
 
       /**
        * XXX italic style for specifying state change is not a ideal solution
@@ -303,25 +190,27 @@ var Connectivity = (function(window, document, undefined) {
         dataNetwork.textContent = operator;
         dataConnection.textContent = data;
       }
-    }
+    };
 
-    if (!gMobileConnection)
+    if (!mobileConnection)
       return setCarrierStatus({});
 
     // ensure the SIM card is present and unlocked
-    var cardState = kCardState[gMobileConnection.cardState];
-    if (cardState)
-      return setCarrierStatus({ error: cardState });
+    var cardState = mobileConnection.cardState || 'null';
+    var l10nId = kCardStateL10nId[cardState];
+    if (l10nId) {
+      return setCarrierStatus({ error: _(l10nId), l10nId: l10nId });
+    }
 
     // operator name & data connection type
-    if (!gMobileConnection.data || !gMobileConnection.data.network)
+    if (!mobileConnection.data || !mobileConnection.data.network)
       return setCarrierStatus({ error: '???'}); // XXX should never happen
-    var operatorInfos = MobileOperator.userFacingInfo(gMobileConnection);
+    var operatorInfos = MobileOperator.userFacingInfo(mobileConnection);
     var operator = operatorInfos.operator;
     if (operatorInfos.region) {
       operator += ' ' + operatorInfos.region;
     }
-    var data = gMobileConnection.data;
+    var data = mobileConnection.data;
     var dataType = (data.connected && data.type) ? kDataType[data.type] : '';
     setCarrierStatus({
       operator: operator,
@@ -330,18 +219,48 @@ var Connectivity = (function(window, document, undefined) {
   }
 
   /**
+   * Call Settings
+   */
+
+  var callDesc = document.getElementById('call-desc');
+  callDesc.style.fontStyle = 'italic';
+
+  function updateCallSettings() {
+    if (!_initialized) {
+      init();
+      return; // init will call updateCallSettings()
+    }
+
+    var mobileConnection = getMobileConnection();
+
+    if (!mobileConnection)
+      return;
+
+    // update the current SIM card state
+    var cardState = mobileConnection.cardState || 'null';
+    localize(callDesc, kCardStateL10nId[cardState]);
+  }
+
+  /**
    * Bluetooth Manager
    */
 
-  var bluetoothDesc = document.getElementById('bluetooth-desc');
 
   function updateBluetooth() {
-    bluetoothDesc.textContent = gBluetooth.enabled ?
-      _('bt-status-nopaired') : _('bt-status-turnoff');
-    if (!gBluetooth.enabled) {
+    var bluetoothDesc = document.getElementById('bluetooth-desc');
+    // if 'adapteradd' or 'disabled' event happens before init
+    if (!_initialized) {
+      init();
+      return; // init will call updateBluetooth()
+    }
+
+    var l10nId = bluetooth.enabled ? 'bt-status-nopaired' : 'bt-status-turnoff';
+    localize(bluetoothDesc, l10nId);
+
+    if (!bluetooth.enabled) {
       return;
     }
-    var req = gBluetooth.getDefaultAdapter();
+    var req = bluetooth.getDefaultAdapter();
     req.onsuccess = function bt_getAdapterSuccess() {
       var defaultAdapter = req.result;
       var reqPaired = defaultAdapter.getPairedDevices();
@@ -355,22 +274,21 @@ var Connectivity = (function(window, document, undefined) {
         paired.sort(function(a, b) {
           return a.name > b.name;
         });
-        var text = _('bt-status-paired', {
-          name: paired[0].name,
-          n: length - 1
-        });
-        bluetoothDesc.textContent = text;
+
+        localize(bluetoothDesc, 'bt-status-paired',
+                 { name: paired[0].name, n: length - 1 });
       };
     };
   }
 
   function initSystemMessageHandler() {
+    // XXX this is not a good way to interact with bluetooth.js
     var handlePairingRequest = function(message, method) {
-      window.location.hash = '#bluetooth';
+      Settings.currentPanel = '#bluetooth';
       setTimeout(function() {
         gDeviceList.onRequestPairing(message, method);
       }, 1500);
-    }
+    };
 
     // Bind message handler for incoming pairing requests
     navigator.mozSetMessageHandler('bluetooth-requestconfirmation',
@@ -401,18 +319,21 @@ var Connectivity = (function(window, document, undefined) {
     updateWifi: updateWifi,
     updateCarrier: updateCarrier,
     updateBluetooth: updateBluetooth,
-    get statusText() {
-      return {
-        wifi: document.getElementById('wifi-desc').textContent,
-        carrier: document.getElementById('data-desc').textContent,
-        hotspot: document.getElementById('hotspot-desc').textContent,
-        bluetooth: document.getElementById('bluetooth-desc').textContent
-      };
-    }
+    set wifiEnabled(listener) { wifiEnabledListeners.push(listener) },
+    set wifiDisabled(listener) { wifiDisabledListeners.push(listener); },
+    set wifiStatusChange(listener) { wifiStatusChangeListeners.push(listener); }
   };
 })(this, document);
 
 
-// startup
-onLocalized(Connectivity.init.bind(Connectivity));
-
+// starting when we get a chance
+navigator.mozL10n.ready(function loadWhenIdle() {
+  var idleObserver = {
+    time: 3,
+    onidle: function() {
+      Connectivity.init();
+      navigator.removeIdleObserver(idleObserver);
+    }
+  };
+  navigator.addIdleObserver(idleObserver);
+});

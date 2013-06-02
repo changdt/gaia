@@ -67,9 +67,11 @@ var PopupManager = {
     // this seems needed, or an override to origin in close()
     this._currentOrigin = origin;
 
-    this.container.appendChild(popup);
+    if (WindowManager.getDisplayedApp() == origin) {
+      this.screen.classList.add('popup');
+    }
 
-    this.screen.classList.add('popup');
+    this.container.appendChild(popup);
 
     popup.addEventListener('mozbrowsererror', this);
     popup.addEventListener('mozbrowserloadend', this);
@@ -144,7 +146,15 @@ var PopupManager = {
 
       case 'mozbrowserlocationchange':
         evt.target.dataset.url = evt.detail;
-        this.show();
+
+        if (WindowManager.getDisplayedApp() !== evt.target.dataset.frameOrigin)
+          return;
+
+        if (typeof(popup) === 'undefined') {
+          return;
+        }
+
+        this.title.textContent = this.getTitleFromUrl(popup.dataset.url);
         break;
 
       case 'mozbrowsererror':
@@ -208,8 +218,8 @@ var PopupManager = {
         break;
 
       case 'keyboardchange':
-        this.setHeight(window.innerHeight -
-          StatusBar.height - evt.detail.height);
+        var keyboardHeight = KeyboardManager.getHeight();
+        this.setHeight(window.innerHeight - StatusBar.height - keyboardHeight);
         break;
 
       case 'keyboardhide':
@@ -224,7 +234,8 @@ var PopupManager = {
       return;
     }
 
-    var contentOrigin = this._currentPopup[this._currentOrigin].dataset.url;
+    var contentOrigin =
+      this.getTitleFromUrl(this._currentPopup[this._currentOrigin].dataset.url);
     var _ = navigator.mozL10n.get;
 
     if (AirplaneMode.enabled) {

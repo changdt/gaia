@@ -4,6 +4,15 @@
 
 var mozL10n = navigator.mozL10n;
 
+// Dependcy handling for Cards
+// We match the first section of each card type to the key
+// E.g., setup-progress, would load the 'setup' lazyCards.setup
+var lazyCards = {
+    compose: ['js/compose-cards.js', 'style/compose-cards.css'],
+    settings: ['js/setup-cards.js', 'style/setup-cards.css'],
+    setup: ['js/setup-cards.js', 'style/setup-cards.css']
+};
+
 function dieOnFatalError(msg) {
   console.error('FATAL:', msg);
   throw new Error(msg);
@@ -69,10 +78,10 @@ function batchRemoveClass(domNode, searchClass, classToRemove) {
   }
 }
 
-const MATCHED_TEXT_CLASS = 'highlight';
+var MATCHED_TEXT_CLASS = 'highlight';
 
 function appendMatchItemTo(matchItem, node) {
-  const text = matchItem.text;
+  var text = matchItem.text;
   var idx = 0;
   for (var iRun = 0; iRun <= matchItem.matchRuns.length; iRun++) {
     var run;
@@ -199,6 +208,14 @@ var Cards = {
    */
   _cardStack: [],
   activeCardIndex: -1,
+  /*
+   * @oneof[null @listof[cardName modeName]]{
+   *   If a lazy load is causing us to have to wait before we push a card, this
+   *   is the type of card we are planning to push.  This is used by hasCard
+   *   to avoid returning misleading answers while an async push is happening.
+   * }
+   */
+  _pendingPush: null,
 
   /**
    * Cards can stack on top of each other, make sure the stacked set is
@@ -266,8 +283,6 @@ var Cards = {
    */
   _eatingEventsUntilNextCard: false,
 
-  TRAY_GUTTER_WIDTH: 60,
-
   /**
    * Initialize and bind ourselves to the DOM which should now be fully loaded.
    */
@@ -312,10 +327,42 @@ var Cards = {
       this._popupActive.close();
       return;
     }
-    if (this._trayActive &&
-        (event.clientX >
-         this._containerNode.offsetWidth - this.TRAY_GUTTER_WIDTH)) {
+
+    // Find the card containing the event target.
+    var cardNode = event.target;
+    for (cardNode = event.target; cardNode; cardNode = cardNode.parentNode) {
+      if (cardNode.classList.contains('card'))
+        break;
+    }
+
+    // If tray is active and the click is in the card that is after
+    // current card (in the gutter), then just transition back to
+    // that card.
+    if (this._trayActive && cardNode && cardNode.classList.contains('after')) {
       event.stopPropagation();
+
+      // Look for a card with a data-tray-target attribute
+      var targetIndex = -1;
+      this._cardStack.some(function(card, i) {
+        if (card.domNode.hasAttribute('data-tray-target')) {
+          targetIndex = i;
+          return true;
+        }
+      });
+
+      // Choose a default of one card ahead
+      if (targetIndex === -1)
+        targetIndex = this.activeCardIndex + 1;
+
+      var indexDiff = targetIndex - (this.activeCardIndex + 1);
+      if (indexDiff > 0) {
+        this._afterTransitionAction = (function() {
+          this.removeCardAndSuccessors(this._cardStack[0].domNode,
+                                       'none', indexDiff);
+          this.moveToCard(targetIndex, 'animate', 'forward');
+        }.bind(this));
+      }
+
       this.moveToCard(this.activeCardIndex + 1, 'animate', 'forward');
     }
   },
@@ -383,8 +430,23 @@ var Cards = {
    */
   pushCard: function(type, mode, showMethod, args, placement) {
     var cardDef = this._cardDefs[type];
-    if (!cardDef)
+    var typePrefix = type.split('-')[0];
+
+    if (!cardDef && lazyCards[typePrefix]) {
+      this._pendingPush = [type, mode];
+      var saveArgs = Array.slice(arguments);
+      var callback = function() {
+        this.pushCard.apply(this, saveArgs);
+      };
+
+      this.eatEventsUntilNextCard();
+      App.loader.load(lazyCards[typePrefix], callback.bind(this));
+      return;
+    } else if (!cardDef) {
       throw new Error('No such card def type: ' + type);
+    }
+    this._pendingPush = null;
+
     var modeDef = cardDef.modes[mode];
     if (!modeDef)
       throw new Error('No such card mode: ' + mode);
@@ -402,7 +464,7 @@ var Cards = {
     if (!placement) {
       cardIndex = this._cardStack.length;
       insertBuddy = null;
-      domNode.classList.add(cardIndex === 0 ? 'before': 'after');
+      domNode.classList.add(cardIndex === 0 ? 'before' : 'after');
     }
     else if (placement === 'left') {
       cardIndex = this.activeCardIndex++;
@@ -419,6 +481,12 @@ var Cards = {
     }
     this._cardStack.splice(cardIndex, 0, cardInst);
     this._cardsNode.insertBefore(domNode, insertBuddy);
+
+    // If the card has any <button type="reset"> buttons,
+    // make them clear the field they're next to and not the entire form.
+    // See input_areas.js and shared/style/input_areas.css.
+    hookupInputAreaResetButtons(domNode);
+
     if ('postInsert' in cardImpl)
       cardImpl.postInsert();
 
@@ -439,8 +507,6 @@ var Cards = {
         return i;
       }
     }
-    throw new Error('Unable to find card with type: ' + type + ' mode: ' +
-                    mode);
   },
 
   _findCardUsingImpl: function(impl) {
@@ -449,16 +515,34 @@ var Cards = {
       if (cardInst.cardImpl === impl)
         return i;
     }
-    throw new Error('Unable to find card using impl:', impl);
   },
 
-  _findCard: function(query) {
+  _findCard: function(query, skipFail) {
+    var result;
     if (Array.isArray(query))
-      return this._findCardUsingTypeAndMode(query[0], query[1]);
+      result = this._findCardUsingTypeAndMode(query[0], query[1], skipFail);
     else if (typeof(query) === 'number') // index number
-      return query;
+      result = query;
     else
-      return this._findCardUsingImpl(query);
+      result = this._findCardUsingImpl(query);
+
+    if (result > -1)
+      return result;
+    else if (!skipFail)
+      throw new Error('Unable to find card with query:', query);
+    else
+      // Returning undefined explicitly so that index comparisons, like
+      // the one in hasCard, are correct.
+      return undefined;
+  },
+
+  hasCard: function(query) {
+    if (this._pendingPush && Array.isArray(query) && query.length === 2 &&
+        this._pendingPush[0] === query[0] &&
+        this._pendingPush[1] === query[1])
+      return true;
+
+    return this._findCard(query, true) > -1;
   },
 
   findCardObject: function(query) {
@@ -466,27 +550,35 @@ var Cards = {
   },
 
   folderSelector: function(callback) {
-    // XXX: Unified folders will require us to make sure we get the folder list
-    //      for the account the message originates from.
-    if (!this.folderPrompt) {
-      var selectorTitle = mozL10n.get('messages-folder-select');
-      this.folderPrompt = new ValueSelector(selectorTitle);
-    }
     var self = this;
-    var folderCardObj = Cards.findCardObject(['folder-picker', 'navigation']);
-    var folderImpl = folderCardObj.cardImpl;
-    var folders = folderImpl.foldersSlice.items;
-    for (var i = 0; i < folders.length; i++) {
-      var folder = folders[i];
-      this.folderPrompt.addToList(folder.name, folder.depth, function(folder) {
-        return function() {
-          self.folderPrompt.hide();
-          callback(folder);
-        }
-      }(folder));
 
-    }
-    this.folderPrompt.show();
+    App.loader.load(
+      ['style/value_selector.css', 'js/value_selector.js'],
+      function() {
+        // XXX: Unified folders will require us to make sure we get
+        //      the folder list for the account the message originates from.
+        if (!self.folderPrompt) {
+          var selectorTitle = mozL10n.get('messages-folder-select');
+          self.folderPrompt = new ValueSelector(selectorTitle);
+        }
+
+        var folderCardObj =
+          Cards.findCardObject(['folder-picker', 'navigation']);
+        var folderImpl = folderCardObj.cardImpl;
+        var folders = folderImpl.foldersSlice.items;
+        for (var i = 0; i < folders.length; i++) {
+          var folder = folders[i];
+          self.folderPrompt.addToList(folder.name, folder.depth,
+            function(folder) {
+              return function() {
+                self.folderPrompt.hide();
+                callback(folder);
+              }
+            }(folder));
+
+        }
+        self.folderPrompt.show();
+      });
   },
 
   moveToCard: function(query, showMethod) {
@@ -536,74 +628,6 @@ var Cards = {
         anchorIn.removeChild(cleanupDivs[i]);
       }
     };
-  },
-
-  /**
-   * Create a popup associated with a given node.  We mask out the part of the
-   * screen that is not the node, helping make it obvious what the menu is
-   * related to.  We currently do not try to show an arrow thing, although it
-   * would be friendly of us if we did.
-   *
-   * https://wiki.mozilla.org/Gaia/Design/Patterns#Dialogues:_Popups
-   */
-  popupMenuForNode: function(menuTree, domNode, legalClickTargets, callback) {
-    var self = this,
-        bounds = domNode.getBoundingClientRect();
-
-    var popupInfo = this._popupActive = {
-      popupNode: menuTree,
-      maskNodeCleanup: this._createMaskForNode(domNode, bounds),
-      close: function(result) {
-        self._popupActive = false;
-        self._rootNode.removeChild(popupInfo.popupNode);
-        popupInfo.maskNodeCleanup();
-        callback(result);
-      }
-    };
-
-    var uiWidth = this._containerNode.offsetWidth,
-        uiHeight = this._containerNode.offsetHeight;
-
-    popupInfo.popupNode.classList.add('popup');
-    this._rootNode.appendChild(popupInfo.popupNode);
-    // now we need to position the popup...
-    var menuWidth = popupInfo.popupNode.offsetWidth,
-        menuHeight = popupInfo.popupNode.offsetHeight,
-        nodeCenter = bounds.top + (bounds.bottom - bounds.top) / 2,
-        menuTop, menuLeft;
-
-    const MARGIN = 4;
-
-    // - Menu goes below item
-    if (nodeCenter < uiHeight / 2) {
-      menuTop = bounds.bottom + MARGIN;
-      if (menuTop + menuHeight >= uiHeight)
-        menuTop = uiHeight - menuHeight - MARGIN;
-    }
-    // - Menu goes above item
-    else {
-      menuTop = bounds.top - menuHeight - MARGIN;
-
-      if (menuTop < MARGIN)
-        menuTop = MARGIN;
-    }
-
-    menuLeft = (uiWidth - menuWidth) / 2;
-
-    popupInfo.popupNode.style.top = menuTop + 'px';
-    popupInfo.popupNode.style.left = menuLeft + 'px';
-
-    popupInfo.popupNode.addEventListener('click', function(event) {
-      var node = event.target;
-      while (node !== popupInfo.popupNode) {
-        for (var i = 0; i < legalClickTargets.length; i++) {
-          if (node.classList.contains(legalClickTargets[i])) {
-            popupInfo.close(node);
-            return;
-          }
-        }
-      }
-    }, false);
   },
 
   /**
@@ -708,6 +732,13 @@ var Cards = {
     }
   },
 
+  /**
+   * Shortcut for removing all the cards
+   */
+  removeAllCards: function() {
+    return this.removeCardAndSuccessors(null, 'none');
+  },
+
   _showCard: function(cardIndex, showMethod, navDirection) {
     // Do not do anything if this is a show card for the current card.
     if (cardIndex === this.activeCardIndex) {
@@ -745,7 +776,7 @@ var Cards = {
       // anim-overlays are the transitions to new layers in the stack. If
       // starting a new one, it is forward movement and needs a new zIndex.
       // Otherwise, going back to
-      this._zIndex += 100;
+      this._zIndex += 10;
     }
 
     // If going back and the beginning node was an overlay, do not animate
@@ -761,7 +792,7 @@ var Cards = {
         }
       } else {
         endNode = null;
-        this._zIndex -= 100;
+        this._zIndex -= 10;
       }
     }
 
@@ -819,12 +850,6 @@ var Cards = {
 
     // Hide toaster while active card index changed:
     Toaster.hide();
-    // Popup toaster that pended for previous card view.
-    var pendingToaster = Toaster.pendingStack.slice(-1)[0];
-    if (pendingToaster && showMethod == 'immediate') {
-      pendingToaster();
-      Toaster.pendingStack.pop();
-    }
 
     this.activeCardIndex = cardIndex;
     if (cardInst)
@@ -842,7 +867,7 @@ var Cards = {
         this._eatingEventsUntilNextCard = false;
       if (this._animatingDeadDomNodes.length) {
         // Use a setTimeout to give the animation some space to settle.
-        setTimeout(function () {
+        setTimeout(function() {
           this._animatingDeadDomNodes.forEach(function(domNode) {
             if (domNode.parentNode)
               domNode.parentNode.removeChild(domNode);
@@ -857,6 +882,20 @@ var Cards = {
       if (endNode.classList.contains('disabled-anim-vertical')) {
         removeClass(endNode, 'disabled-anim-vertical');
         addClass(endNode, 'anim-vertical');
+      }
+
+      // Popup toaster that pended for previous card view.
+      var pendingToaster = Toaster.pendingStack.slice(-1)[0];
+      if (pendingToaster) {
+        pendingToaster();
+        Toaster.pendingStack.pop();
+      }
+
+      // If any action to to at the end of transition trigger now.
+      if (this._afterTransitionAction) {
+        var afterTransitionAction = this._afterTransitionAction;
+        this._afterTransitionAction = null;
+        afterTransitionAction();
       }
     }
   },
@@ -953,15 +992,12 @@ var Toaster = {
   /**
    * Tell toaster listeners about a mutation we just made.
    *
-   * @args[
-   *   @param[undoableOp]
-   *   @param[pending #:optional Boolean]{
-   *     If true, indicates that we should wait to display this banner until we
-   *     transition to the next card.  This is appropriate for things like
-   *     deleting the message that is displayed on the current card (and which
-   *     will be imminently closed).
-   *   }
-   * ]
+   * @param {Object} undoableOp undoable operation.
+   * @param {Boolean} pending
+   *   If true, indicates that we should wait to display this banner until we
+   *   transition to the next card.  This is appropriate for things like
+   *   deleting the message that is displayed on the current card (and which
+   *   will be imminently closed).
    */
   logMutation: function(undoableOp, pending) {
     if (pending) {
@@ -1060,6 +1096,35 @@ var Toaster = {
   }
 };
 
+/**
+ * Confirm dialog helper function. Display the dialog by providing dialog body
+ * element and button id/handler function.
+ *
+ */
+var ConfirmDialog = {
+  dialog: null,
+  show: function(dialog, confirm, cancel) {
+    this.dialog = dialog;
+    var formSubmit = function(evt) {
+      this.hide();
+      switch (evt.explicitOriginalTarget.id) {
+        case confirm.id:
+          confirm.handler();
+          break;
+        case cancel.id:
+          if (cancel.handler)
+            cancel.handler();
+          break;
+      }
+      return false;
+    };
+    dialog.addEventListener('submit', formSubmit.bind(this));
+    document.body.appendChild(dialog);
+  },
+  hide: function() {
+    document.body.removeChild(this.dialog);
+  }
+};
 ////////////////////////////////////////////////////////////////////////////////
 // Attachment Formatting Helpers
 
@@ -1105,3 +1170,84 @@ function prettyDate(time) {
 })();
 
 ////////////////////////////////////////////////////////////////////////////////
+
+/**
+ * Class to handle form input navigation.
+ *
+ * If 'Enter' is hit, next input element will be focused,
+ * and if the input element is the last one, trigger 'onLast' callback.
+ *
+ * options:
+ *   {
+ *     formElem: element,             // The form element
+ *     checkFormValidity: function    // Function to check form validity
+ *     onLast: function               // Callback when 'Enter' in the last input
+ *   }
+ */
+function FormNavigation(options) {
+  function extend(destination, source) {
+    for (var property in source)
+      destination[property] = source[property];
+    return destination;
+  }
+
+  if (!options.formElem) {
+    throw new Error('The form element should be defined.');
+  }
+
+  var self = this;
+  this.options = extend({
+    formElem: null,
+    checkFormValidity: function checkFormValidity() {
+      return self.options.formElem.checkValidity();
+    },
+    onLast: function() {}
+  }, options);
+
+  this.options.formElem.addEventListener('keypress',
+    this.onKeyPress.bind(this));
+}
+
+FormNavigation.prototype = {
+  onKeyPress: function formNav_onKeyPress(event) {
+    if (event.keyCode === 13) {
+      // If the user hit enter, focus the next form element, or, if the current
+      // element is the last one and the form is valid, submit the form.
+      var nextInput = this.focusNextInput(event);
+      if (!nextInput && this.options.checkFormValidity()) {
+        this.options.onLast();
+      }
+    }
+  },
+
+  focusNextInput: function formNav_focusNextInput(event) {
+    var currentInput = event.target;
+    var inputElems = this.options.formElem.getElementsByTagName('input');
+    var currentInputFound = false;
+
+    for (var i = 0; i < inputElems.length; i++) {
+      var input = inputElems[i];
+      if (currentInput === input) {
+        currentInputFound = true;
+        continue;
+      } else if (!currentInputFound) {
+        continue;
+      }
+
+      if (input.type === 'hidden' || input.type === 'button') {
+        continue;
+      }
+
+      input.focus();
+      if (document.activeElement !== input) {
+        // We couldn't focus the element we wanted.  Try with the next one.
+        continue;
+      }
+      return input;
+    }
+
+    // If we couldn't find anything to focus, just blur the initial element.
+    currentInput.blur();
+    return null;
+  }
+};

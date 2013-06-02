@@ -23,6 +23,7 @@ var ListMenu = {
     window.addEventListener('click', this, true);
     window.addEventListener('screenchange', this, true);
     window.addEventListener('home', this);
+    window.addEventListener('holdhome', this);
   },
 
   // Pass an array of list items and handler for clicking on the items
@@ -119,17 +120,23 @@ var ListMenu = {
     this.element.classList.add('visible');
   },
 
-  hide: function lm_hide() {
+  hide: function lm_hide(callback) {
     if (!this.visible)
       return;
 
     var self = this;
-    this.container.addEventListener('transitionend',
-      function onTransitionEnd() {
-        self.element.classList.remove('visible');
-        self.container.removeEventListener('transitionend', onTransitionEnd);
-      });
-    this.container.classList.add('slidedown');
+    var container = this.container;
+    container.addEventListener('transitionend', function list_hide() {
+      container.removeEventListener('transitionend', list_hide);
+      self.element.classList.remove('visible');
+
+      if (callback)
+        setTimeout(callback);
+    });
+
+    setTimeout(function() {
+      container.classList.add('slidedown');
+    });
   },
 
   handleEvent: function lm_handleEvent(evt) {
@@ -157,15 +164,16 @@ var ListMenu = {
           return;
         }
 
-        this.hide();
-        this.onreturn(value);
+        this.hide(this.onreturn.bind(this, value));
         break;
 
       case 'home':
-        if (this.visible) {
-          this.hide();
-          this.oncancel();
-        }
+      case 'holdhome':
+        if (!this.visible)
+          return;
+
+        this.hide();
+        this.oncancel();
         break;
     }
   }

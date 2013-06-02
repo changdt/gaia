@@ -1,37 +1,83 @@
 
 'use strict';
 
-const Homescreen = (function() {
+var Homescreen = (function() {
   var mode = 'normal';
   var origin = document.location.protocol + '//homescreen.' +
     document.location.host.replace(/(^[\w\d]+.)?([\w\d]+.[a-z]+)/, '$2');
   var _ = navigator.mozL10n.get;
   setLocale();
-  window.addEventListener('localized', function localize() {
+  navigator.mozL10n.ready(function localize() {
     setLocale();
     GridManager.localize();
   });
 
-  // Initialize the various components.
-  PaginationBar.init('.paginationScroller');
-  GridManager.init('.apps', '.dockWrapper', function gm_init() {
-    PaginationBar.show();
-    GridManager.goToPage(1);
-    DragDropManager.init();
-    Wallpaper.init();
-  });
+  var initialized = false, landingPage;
+  onConnectionChange(navigator.onLine);
 
-  window.addEventListener('hashchange', function() {
-    if (document.location.hash != '#root')
+  function initialize(lPage) {
+    if (initialized) {
       return;
+    }
 
-    if (Homescreen.isInEditMode()) {
-      Homescreen.setMode('normal');
-      GridManager.markDirtyState();
-      ConfirmDialog.hide();
-      GridManager.goToPage(GridManager.pageHelper.getCurrentPageNumber());
-    } else {
-      GridManager.goToPage(1);
+    PaginationBar.init('.paginationScroller');
+
+    initialized = true;
+    landingPage = lPage;
+
+    var swipeSection = Configurator.getSection('swipe');
+    var options = {
+      gridSelector: '.apps',
+      dockSelector: '.dockWrapper',
+      tapThreshold: Configurator.getSection('tap_threshold'),
+      // It defines the threshold to consider a gesture like a swipe. Number
+      // in the range 0.0 to 1.0, both included, representing the screen width
+      swipeThreshold: swipeSection.threshold,
+      swipeFriction: swipeSection.friction,
+      swipeTransitionDuration: swipeSection.transition_duration
+    };
+
+    GridManager.init(options, function gm_init() {
+      window.addEventListener('hashchange', function() {
+        if (document.location.hash != '#root')
+          return;
+
+        // this happens when the user presses the 'home' button
+        if (Homescreen.isInEditMode()) {
+          exitFromEditMode();
+        } else {
+          GridManager.goToPage(landingPage);
+        }
+        GridManager.ensurePanning();
+      });
+
+      PaginationBar.show();
+      if (document.location.hash === '#root') {
+        // Switch to the first page only if the user has not already
+        // start to pan while home is loading
+        GridManager.goToPage(landingPage);
+      }
+      DragDropManager.init();
+      Wallpaper.init();
+    });
+  }
+
+  function exitFromEditMode() {
+    Homescreen.setMode('normal');
+    ConfirmDialog.hide();
+    GridManager.exitFromEditMode();
+  }
+
+  document.addEventListener('mozvisibilitychange', function mozVisChange() {
+    if (document.mozHidden && Homescreen.isInEditMode()) {
+      exitFromEditMode();
+    }
+
+    if (document.mozHidden == false) {
+      setTimeout(function forceRepaint() {
+        var helper = document.getElementById('repaint-helper');
+        helper.classList.toggle('displayed');
+      });
     }
   });
 
@@ -53,6 +99,19 @@ const Homescreen = (function() {
     document.documentElement.dir = navigator.mozL10n.language.direction;
   }
 
+  function onConnectionChange(isOnline) {
+    var mode = isOnline ? 'online' : 'offline';
+    document.body.dataset.online = mode;
+  }
+
+  window.addEventListener('online', function onOnline(evt) {
+    onConnectionChange(true);
+  });
+
+  window.addEventListener('offline', function onOnline(evt) {
+    onConnectionChange(false);
+  });
+
   return {
     /*
      * Displays the contextual menu given an app.
@@ -70,7 +129,11 @@ const Homescreen = (function() {
       var confirm = {
         callback: function onAccept() {
           ConfirmDialog.hide();
-          app.uninstall();
+          if (app.isBookmark) {
+            app.uninstall();
+          } else {
+            navigator.mozApps.mgmt.uninstall(app);
+          }
         },
         applyClass: 'danger'
       };
@@ -96,6 +159,8 @@ const Homescreen = (function() {
     isInEditMode: function() {
       return mode === 'edit';
     },
+
+    init: initialize,
 
     setMode: function(newMode) {
       mode = document.body.dataset.mode = newMode;

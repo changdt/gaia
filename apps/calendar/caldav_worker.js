@@ -1,8 +1,12 @@
-['calendar', 'responder',
- 'inspect', 'worker/thread',
+['calendar',
+ 'responder',
+ 'inspect',
+ 'presets',
+ 'worker/thread',
  'ext/ical',
  'ext/caldav',
  'ext/uuid',
+ 'service/ical_recur_expansion',
  'service/caldav'].forEach(function(script) {
    // ?time= is for cache busting in development...
    // there have been cases where nightly would not
@@ -11,7 +15,7 @@
 });
 
 var thread = new Calendar.Thread(this);
-this.console = new thread.console();
+this.console = new thread.console('caldav worker');
 
 thread.addRole('caldav');
 

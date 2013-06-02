@@ -57,18 +57,26 @@
  * ----------------------------
  * In order to build the list of tags, the module should be informed as soon as
  * the device is started to check if a SIM change was made. If so, the last tag
- * is closed and a new one open.
+ * is closed and a new one is open.
  *
  * Closing a tag is to compute current and offset values and set the end date.
  * Opening a tag is to add a new tag object with the SIM id and the start date.
+ *
+ * When closing, we get tags labelling the current date. We say a tag labels a
+ * date if:
+ *   a) tag's start or end refer to the same day as date or
+ *   b) date is between tag's start and tag's end or
+ *   c) date is latter than tag's start and there is no tag's end
+ *
+ * At least one (the last and current) is retrieved. Now:
  *
  * > current value is got by asking Statistics API for the actual value at the
  *   moment of the switch.
  *
  * > offset value is calculated by:
- *   a) if there is a fixing value -> offset = actual - fixing
- *   b) if there is only one tag   -> offset = actual
- *   c) if there is more than one, -> offset =
+ *   a) if there is a fixing value for now -> offset = actual - fixing
+ *   b) if there is only one tag           -> offset = actual
+ *   c) if there is more than one,         -> offset =
  *      (actual - <previous tag's current>) + <last tag with same SIM's offset>
  *
  * 2- Setting a fixing value
@@ -86,16 +94,22 @@
  * 3- Getting the usage for a SIM in a goal date
  * ---------------------------------------------
  * To get this value we need to retrieve an ordered subset of the tag list
- * labelling the goal date. We say a tag labels a date if:
- *   a) tag's start or end refer to the same day as date or
- *   b) date is between tag's start and tag's end or
- *   c) date is latter then tag's start and there is no tag's end
+ * labelling the goal date.
  *
  * Now passing through this subset in reverse order we look for the first tag
- * with the SIM required. Two cases can occur:
- *   a) if the tag has no end or the end is not the goal date, -> usage =
- *      (actual - <previous tag's current>) + <last tag with same SIM's offset>
- *   b) else -> usage = tag's offset
+ * with the SIM required. Several cases can occur:
+ *   a) the tag has no end or the end is not the goal date, -> usage =
+ *
+ *     (actual - <previous tag's actual>*) + <last tag with same SIM's offset>**
+ *       if there is no fixing value for the goal date
+ *
+ *     actual - <fixing value for goal date>
+ *       if there is a fixing value for the goal date
+ *
+ *   ( *) Or 0 if there is no previous tag
+ *   (**) Or 0 if there is no a closed tag
+ *
+ *   b) the tag is closed -> usage = tag's offset
  *
  * Conclussions
  * ============
@@ -115,7 +129,7 @@ var MindGap = (function() {
     return window.parent.location.pathname === '/handle_gaps.html';
   }
 
-  // Gets the tag list and currentUsage and pass it to the callback
+  // Closes the current tag and open a new one
   function updateTagList(newSIM) {
     var now = new Date();
     asyncStorage.getItem('dataUsageTags', function _onTags(tags) {
@@ -134,7 +148,7 @@ var MindGap = (function() {
         // Now close the last tag and open new
         closeLastTag(tags, currentDataUsage, now);
         openNewTag(tags, newSIM, now);
-        debug('After: ' + JSON.stringify(tags));
+        debug('After: ', tags);
 
         // Finally store tags again
         asyncStorage.setItem('dataUsageTags', tags, function _done() {
@@ -146,65 +160,97 @@ var MindGap = (function() {
 
   // Adds a new tag to the taglist
   function openNewTag(tags, newSIM, when) {
-    tags.push({ sim: newSIM, start: when });
+    tags.push({ sim: newSIM, start: when, fixing: [] });
   }
 
-  // Adds fields end, actual and offset to current opened tag
-  function closeLastTag(tags, currentDataUsage, when) {
-    if (!tags.length)
-      return;
+  // Adds fields end, actual and offset to current open tag
+  function closeLastTag(allTags, currentDataUsage, when) {
+    if (!allTags.length) {
+      return; // nothing to close, trivially closed
+    }
 
-    var tag = tags[tags.length - 1];
+    var tag = allTags[allTags.length - 1];
     tag.actual = currentDataUsage;
 
-    if (tag.fixing !== undefined) {
-      tag.offset = tag.actual - tag.fixing;
+    var tags = getTagsForDate(allTags, when);
+    if (!tags.length) {
+      console.error('Impossible, we should be closing an unexistent tag.');
+      return;
+    }
 
-    } else if (tags.length < 2) {
+    if (tags.length < 2) {
       tag.offset = tag.actual;
 
     } else {
-      var sim = tag.sim;
-      var previous = tags[tags.length - 2];
-      tag.offset = (tag.actual - previous.actual) + getLastOffset(sim, tags);
+      var fixing = getFixingFor(when, tag.fixing);
+      if (fixing !== null) {
+        tag.offset = tag.actual - fixing;
+      } else {
+        var sim = tag.sim;
+        var previous = tags[tags.length - 2];
+        tag.offset = (tag.actual - previous.actual) +
+                      getLastClosedOffset(sim, tags);
+      }
     }
 
     tag.end = when; // XXX: close at the end. Very important!
   }
 
-  // Return the offset of the last time the same SIM was in use
-  function getLastOffset(referenceSIM, tags) {
+  // Return the offset of the last closed tag for the reference SIM
+  function getLastClosedOffset(referenceSIM, tags) {
     for (var i = tags.length - 1; i >= 0; i--) {
       var ctag = tags[i];
-      if (ctag.sim === referenceSIM && ctag.end !== undefined)
+      if (ctag.sim === referenceSIM && ctag.end !== undefined) {
         return ctag.offset;
+      }
     }
     return 0;
   };
 
   // Return the usage for the inserted SIM for a date
   function getUsage(tags, currentUsage, date) {
+    debug('Current TAGS:', tags);
+    debug('Current date:', date);
+    debug('Current usage:', currentUsage);
+
     var tag = tags[tags.length - 1];
     var sim = tag.sim;
-    var todayTags = getTagsForDate(tags, date);
+    var dateTags = getTagsForDate(tags, date);
 
-    var usage; // undefined is a valid value (means no data for that date)
-    for (var i = todayTags.length - 1; i >= 0; i--) {
-      var ctag = todayTags[i];
+    debug('Last tag:', tag);
+    var usage; // XXX: undefined is a valid value (means no data for that date)
+    for (var i = dateTags.length - 1; i >= 0; i--) {
+      var ctag = dateTags[i];
       if (ctag.sim === tag.sim) {
+        debug('Same SIM tag:', ctag);
 
-        // Opened tag
+        // Open tag
         if (ctag.end === undefined || !sameDate(date, ctag.end)) {
-          var prevUsage = tags[i - 1] === undefined ? 0 : tags[i - 1].actual;
-          usage = currentUsage - prevUsage + getLastOffset(sim, todayTags);
+          debug('Open tag case.');
+
+          var fixing = getFixingFor(date, ctag.fixing);
+          if (fixing !== null) {
+            debug('Fixing with:', fixing);
+            usage = currentUsage - fixing;
+
+          } else {
+            var prevUsage = dateTags[i - 1] === undefined ? 0 :
+                            dateTags[i - 1].actual;
+            var offset = getLastClosedOffset(sim, dateTags);
+            debug('Previous usage:', prevUsage);
+            debug('Last same SIM usage:', offset);
+            usage = currentUsage - prevUsage + offset;
+          }
 
         // Closed tag
         } else {
+          debug('Closed tag case. Taking offset:', ctag.offset);
           usage = ctag.offset;
         }
         return usage;
       }
     }
+    debug('No tag found!');
     return usage;
   }
 
@@ -215,23 +261,36 @@ var MindGap = (function() {
   //  c) date is latter then tag's start and there is no tag's end
   function getTagsForDate(tags, date) {
     var time = date.getTime();
-    var todayTags = [];
+    var dateTags = [];
     for (var i = 0, len = tags.length; i < len; i++) {
       var tag = tags[i];
       if (sameDate(date, tag.start) || tag.end && sameDate(date, tag.end) ||
           tag.start.getTime() < time && tag.end === undefined ||
-          tag.start.getTime() < time && time < tag.end.getTime())
+          tag.start.getTime() < time && time < tag.end.getTime()) {
 
-        todayTags.push(tag);
+        dateTags.push(tag);
+      }
     }
-    return todayTags;
+    return dateTags;
   }
 
   // Return true is dateA and dateB refer to the same day
   function sameDate(dateA, dateB) {
-    return dateA.getYear() === dateB.getYear() &&
-           dateA.getMonth() === dateB.getMonth() &&
-           dateA.getDay() === dateB.getDay();
+    return dateA.getUTCFullYear() === dateB.getUTCFullYear() &&
+           dateA.getUTCMonth() === dateB.getUTCMonth() &&
+           dateA.getUTCDate() === dateB.getUTCDate();
+  }
+
+  // Return the fixing value for a date given a list of fixing pairs
+  function getFixingFor(date, fixingList) {
+    fixingList = fixingList || [];
+    for (var i = fixingList.length - 1; i >= 0; i--) {
+      var cfixing = fixingList[i];
+      if (sameDate(cfixing[0], date)) {
+        return cfixing[1];
+      }
+    }
+    return null;
   }
 
   return {

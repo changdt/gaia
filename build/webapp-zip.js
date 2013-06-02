@@ -21,6 +21,37 @@ const PR_EXCL = 0x80;
  * @param {nsIFile}      file      file xpcom to add.
  */
 function addToZip(zip, pathInZip, file) {
+  if (file.isHidden())
+    return;
+
+  // if HIDPI is enabled and the file is a bitmap let's check if there is a
+  // bigger version in the directory. If so let's ignore the file in order to
+  // use the bigger version later.
+  let isBitmap = /\.(png|gif|jpg)$/.test(file.path);
+  if (isBitmap) {
+    let isHIDPIBitmap = /@2x/.test(file.path);
+
+    if (HIDPI == 0 && isHIDPIBitmap) {
+      // Do not save hidpi files into the zip in non-hidpi build
+      return;
+    }
+
+    if (HIDPI == 1) {
+      if (isHIDPIBitmap) {
+        // Save the hidpi file to the zip, stripping the name to be more generic.
+        pathInZip = pathInZip.replace('@2x', '');
+      } else {
+        // Check if there a hidpi file. If yes, let's ignore this bitmap since it will
+        // be loaded later (or it has already been loaded, depending on how the OS
+        // organize files.
+        let file2x = new FileUtils.File(file.path.replace(/(\.[a-z]+$)/, '@2x$1'));
+        if (file2x.exists()) {
+          return;
+        }
+      }
+    }
+  }
+
   if (isSubjectToBranding(file.path)) {
     file.append((OFFICIAL == 1) ? 'official' : 'unofficial');
   }
@@ -65,6 +96,7 @@ function addToZip(zip, pathInZip, file) {
   // Case 2/ Directory
   else if (file.isDirectory()) {
     debug(' +directory to zip ' + pathInZip);
+
     if (!zip.hasEntry(pathInZip))
       zip.addEntryDirectory(pathInZip, file.lastModifiedTime, false);
 
@@ -117,6 +149,21 @@ function copyBuildingBlock(zip, blockName, dirName) {
     });
 }
 
+function customizeFiles(zip, src, dest) {
+  // Add customize file to the zip
+  let files = ls(getFile(Gaia.distributionDir, src));
+  files.forEach(function(file) {
+    let filename = dest + file.leafName;
+    if (zip.hasEntry(filename)) {
+      zip.removeEntry(filename, false);
+    }
+    zip.addEntryFile(filename,
+                    Ci.nsIZipWriter.COMPRESSION_DEFAULT,
+                    file,
+                    false);
+  });
+}
+
 let webappsTargetDir = Cc['@mozilla.org/file/local;1']
                          .createInstance(Ci.nsILocalFile);
 webappsTargetDir.initWithPath(PROFILE_DIR);
@@ -150,11 +197,26 @@ Gaia.webapps.forEach(function(webapp) {
   debug('# Create zip for: ' + webapp.domain);
   let files = ls(webapp.sourceDirectoryFile);
   files.forEach(function(file) {
+      // Ignore l10n files if they have been inlined
+      if (GAIA_INLINE_LOCALES &&
+          (file.leafName === 'locales' || file.leafName === 'locales.ini'))
+        return;
       // Ignore files from /shared directory (these files were created by
       // Makefile code). Also ignore files in the /test directory.
       if (file.leafName !== 'shared' && file.leafName !== 'test')
         addToZip(zip, '/' + file.leafName, file);
     });
+
+  if (webapp.sourceDirectoryName === 'system' && Gaia.distributionDir) {
+    if(getFile(Gaia.distributionDir, 'power').exists()) {
+      customizeFiles(zip, 'power', 'resources/power/');
+    }
+  }
+
+  if (webapp.sourceDirectoryName === 'wallpaper' && Gaia.distributionDir &&
+    getFile(Gaia.distributionDir, 'wallpapers').exists()) {
+    customizeFiles(zip, 'wallpapers', 'resources/320x480/');
+  }
 
   // Put shared files, but copy only files actually used by the webapp.
   // We search for shared file usage by parsing webapp source code.
@@ -190,9 +252,11 @@ Gaia.webapps.forEach(function(webapp) {
               used.js.push(path);
             break;
           case 'locales':
-            let localeName = path.substr(0, path.lastIndexOf('.'));
-            if (used.locales.indexOf(localeName) == -1) {
-              used.locales.push(localeName);
+            if (!GAIA_INLINE_LOCALES) {
+              let localeName = path.substr(0, path.lastIndexOf('.'));
+              if (used.locales.indexOf(localeName) == -1) {
+                used.locales.push(localeName);
+              }
             }
             break;
           case 'resources':
@@ -263,7 +327,13 @@ Gaia.webapps.forEach(function(webapp) {
                       ' from: ' + webapp.domain + '\n');
       return;
     }
+
     addToZip(zip, '/shared/resources/' + path, file);
+
+    if (path === 'media/ringtones/' && Gaia.distributionDir &&
+      getFile(Gaia.distributionDir, 'ringtones').exists()) {
+      customizeFiles(zip, 'ringtones', 'shared/resources/media/ringtones/');
+    }
   });
 
   used.styles.forEach(function(name) {

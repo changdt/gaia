@@ -1,8 +1,5 @@
 'use strict';
 
-// We will use a wake lock later to prevent Music from sleeping
-var cpuLock = null;
-
 // We have three types of the playing sources
 // These are for player to know which source type is playing
 var TYPE_MIX = 'mix';
@@ -28,6 +25,14 @@ if (acm) {
     }
   });
 }
+
+window.addEventListener('mozvisibilitychange', function() {
+  if (document.mozHidden) {
+    PlayerView.audio.removeEventListener('timeupdate', PlayerView);
+  } else {
+    PlayerView.audio.addEventListener('timeupdate', PlayerView);
+  }
+});
 
 // View of Player
 var PlayerView = {
@@ -56,11 +61,15 @@ var PlayerView = {
   set dataSource(source) {
     this._dataSource = source;
 
-    // At the same time we also check how many songs in an album
-    // Shuffle button is not necessary when an album only contains one song
-    // or playing a blob
-    if (this.sourceType != TYPE_BLOB)
+    if (this.sourceType && this.sourceType != TYPE_BLOB) {
+      // Shuffle button is not necessary when an album only contains one song
+      // or playing a blob
       this.shuffleButton.disabled = (this._dataSource.length < 2);
+
+      // Also, show or hide the Now Playing button depending on
+      // whether content is queued
+      TitleBar.playerIcon.hidden = (this._dataSource.length < 1);
+    }
   },
 
   init: function pv_init(needSettings) {
@@ -87,6 +96,7 @@ var PlayerView = {
     this.isPlaying = false;
     this.isSeeking = false;
     this.dataSource = [];
+    this.playingBlob = null;
     this.currentIndex = 0;
     this.backgroundIndex = 0;
     this.setSeekBar(0, 0, 0); // Set 0 to default seek position
@@ -118,6 +128,7 @@ var PlayerView = {
       musicdb.cancelEnumeration(playerHandle);
 
     this.dataSource = [];
+    this.playingBlob = null;
   },
 
   setSourceType: function pv_setSourceType(type) {
@@ -159,13 +170,12 @@ var PlayerView = {
 
     // Set source to image and crop it to be fitted when it's onloded
     if (fileinfo.metadata.picture) {
-      createAndSetCoverURL(this.coverImage, fileinfo);
+      displayAlbumArt(this.coverImage, fileinfo);
       this.coverImage.addEventListener('load', pv_showImage);
     }
 
     function pv_showImage(evt) {
       evt.target.removeEventListener('load', pv_showImage);
-      cropImage(evt);
       evt.target.classList.add('fadeIn');
     };
   },
@@ -292,29 +302,29 @@ var PlayerView = {
     // due to b2g cannot get some mp3's duration
     // and the seekBar can still show 00:00 to -00:00
     this.setSeekBar(0, 0, 0);
-  },
-
-  play: function pv_play(targetIndex, backgroundIndex) {
-    this.isPlaying = true;
-
-    // Hold a wake lock to prevent from sleeping
-    if (!cpuLock)
-      cpuLock = navigator.requestWakeLock('cpu');
 
     if (this.endedTimer) {
       clearTimeout(this.endedTimer);
       this.endedTimer = null;
     }
+  },
+
+  play: function pv_play(targetIndex, backgroundIndex) {
+    this.isPlaying = true;
 
     this.showInfo();
 
     if (arguments.length > 0) {
       var songData = this.dataSource[targetIndex];
 
-      playerTitle = songData.metadata.title || unknownTitle;
-      TitleBar.changeTitleText(playerTitle);
+      ModeManager.playerTitle = songData.metadata.title;
+      ModeManager.updateTitle();
       this.artist.textContent = songData.metadata.artist || unknownArtist;
+      this.artist.dataset.l10nId =
+        songData.metadata.artist ? '' : unknownArtistL10nId;
       this.album.textContent = songData.metadata.album || unknownAlbum;
+      this.album.dataset.l10nId =
+        songData.metadata.album ? '' : unknownAlbumL10nId;
       this.currentIndex = targetIndex;
 
       // backgroundIndex is from the index of sublistView
@@ -339,6 +349,7 @@ var PlayerView = {
 
       musicdb.getFile(songData.name, function(file) {
         this.setAudioSrc(file, true);
+        this.playingBlob = file;
       }.bind(this));
     } else if (this.sourceType === TYPE_BLOB && !this.audio.src) {
       // if we reach here, that means we want to a blob
@@ -347,8 +358,11 @@ var PlayerView = {
         var titleBar = document.getElementById('title-text');
 
         titleBar.textContent = metadata.title || unknownTitle;
+        titleBar.dataset.l10nId = metadata.title ? '' : unknownTitleL10nId;
         this.artist.textContent = metadata.artist || unknownArtist;
+        this.artist.dataset.l10nId = metadata.artist ? '' : unknownArtistL10nId;
         this.album.textContent = metadata.album || unknownAlbum;
+        this.album.dataset.l10nId = metadata.album ? '' : unknownAlbumL10nId;
 
         // Add the blob from the dataSource to the fileinfo
         // because we want use the cover image which embedded in that blob
@@ -367,13 +381,6 @@ var PlayerView = {
 
   pause: function pv_pause() {
     this.isPlaying = false;
-
-    // We can go to sleep if music pauses
-    if (cpuLock) {
-      cpuLock.unlock();
-      cpuLock = null;
-    }
-
     this.audio.pause();
   },
 
@@ -415,12 +422,15 @@ var PlayerView = {
         // When reaches the end, stop and back to the previous mode
         this.stop();
         this.clean();
-        playerTitle = null;
+        ModeManager.playerTitle = null;
 
         // To leave player mode and set the correct title to the TitleBar
         // we have to decide which mode we should back to when the player stops
-        var stopToMode = (currentMode != MODE_PLAYER) ? currentMode : fromMode;
-        changeMode(stopToMode);
+        if (ModeManager.currentMode === MODE_PLAYER) {
+          ModeManager.pop();
+        } else {
+          ModeManager.updateTitle();
+        }
         return;
       }
     } else {
@@ -481,25 +491,15 @@ var PlayerView = {
   },
 
   seekAudio: function pv_seekAudio(seekTime) {
-    if (seekTime)
+    if (seekTime !== undefined)
       this.audio.currentTime = seekTime;
 
-    // mp3 returns in microseconds
-    // ogg returns in seconds
-    // note this may be a bug cause mp3 shows wrong duration in
-    // gecko's native audio player
-    // A related Bug 740124 in Bugzilla
     var startTime = this.audio.startTime;
 
-    var originalEndTime =
+    var endTime =
       (this.audio.duration && this.audio.duration != 'Infinity') ?
       this.audio.duration :
       this.audio.buffered.end(this.audio.buffered.length - 1);
-
-    // now mp3 returns in seconds, but keep this checking to prevent bugs
-    var endTime = (originalEndTime > 1000000) ?
-      Math.floor(originalEndTime / 1000000) :
-      Math.floor(originalEndTime);
 
     var currentTime = this.audio.currentTime;
 
@@ -520,7 +520,11 @@ var PlayerView = {
     this.seekIndicator.style.transform = 'translateX(' + x + ')';
 
     this.seekElapsed.textContent = formatTime(currentTime);
-    this.seekRemaining.textContent = '-' + formatTime(endTime - currentTime);
+    var remainingTime = endTime - currentTime;
+    // Check if there is remaining time to show, avoiding to display "-00:00"
+    // while song is loading (Bug 833710)
+    this.seekRemaining.textContent =
+        (remainingTime > 0) ? '-' + formatTime(remainingTime) : '---:--';
   },
 
   handleEvent: function pv_handleEvent(evt) {
@@ -589,10 +593,14 @@ var PlayerView = {
           this.showInfo();
 
           var songData = this.dataSource[this.currentIndex];
-          songData.metadata.rated = parseInt(target.dataset.rating);
+          var targetRating = parseInt(target.dataset.rating);
+          var newRating = (targetRating === songData.metadata.rated) ?
+            targetRating - 1 : targetRating;
 
-          musicdb.updateMetadata(songData.name, songData.metadata,
-            this.setRatings.bind(this, parseInt(target.dataset.rating)));
+          songData.metadata.rated = newRating;
+
+          musicdb.updateMetadata(songData.name, songData.metadata);
+          this.setRatings(newRating);
         }
 
         break;
@@ -606,21 +614,18 @@ var PlayerView = {
       case 'mousemove':
         if (evt.type === 'mousedown') {
           target.setCapture(false);
+          MouseEventShim.setCapture();
           this.isSeeking = true;
           this.seekIndicator.classList.add('highlight');
         }
         if (this.isSeeking && this.audio.duration > 0) {
-          var x = 0;
-
-          if (evt.layerX < 0) {
+          // target is the seek bar
+          var x = (evt.clientX - target.offsetLeft) / target.offsetWidth;
+          if (x < 0)
             x = 0;
-          } else if (evt.layerX > target.clientWidth) {
-            x = target.clientWidth;
-          } else {
-            x = evt.layerX;
-          }
-          // target is the seek bar, and evt.layerX is the moved position
-          var seekTime = x / target.clientWidth * this.seekBar.max;
+          if (x > 1)
+            x = 1;
+          var seekTime = x * this.seekBar.max;
           this.setSeekBar(this.audio.startTime, this.audio.duration, seekTime);
         }
         break;
@@ -629,8 +634,12 @@ var PlayerView = {
         this.seekIndicator.classList.remove('highlight');
 
         if (this.audio.duration > 0) {
-          // target is the seek bar, and evt.layerX is the moved position
-          var seekTime = evt.layerX / target.clientWidth * this.seekBar.max;
+          var x = (evt.clientX - target.offsetLeft) / target.offsetWidth;
+          if (x < 0)
+            x = 0;
+          if (x > 1)
+            x = 1;
+          var seekTime = x * this.seekBar.max;
           this.seekAudio(seekTime);
         }
         break;
@@ -647,7 +656,6 @@ var PlayerView = {
             this.endedTimer == null) {
           var timeToNext = (this.audio.duration - this.audio.currentTime + 1);
           this.endedTimer = setTimeout(function() {
-                                         this.endedTimer = null;
                                          this.next(true);
                                        }.bind(this),
                                        timeToNext * 1000);

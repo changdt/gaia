@@ -86,6 +86,30 @@ var IntegrationHelper = (function() {
       });
     },
 
+    delay: function(device, timeout, givenCallback) {
+      givenCallback = givenCallback || device.defaultCallback;
+
+      var start = Date.now();
+      this.waitFor(function(callback) {
+        if (Date.now() - start >= timeout) {
+          callback(null, true);
+        } else {
+          callback(null, null);
+        }
+      }, null, givenCallback);
+    },
+
+    unlock: function(device) {
+      this.importScript(
+        device,
+        '/tests/atoms/gaia_lock_screen.js',
+        function() {
+          device.executeAsyncScript('GaiaLockScreen.unlock();', null,
+                                    device.defaultCallback);
+        }
+      );
+    },
+
     /**
      * send a js blob to marionette.
      *

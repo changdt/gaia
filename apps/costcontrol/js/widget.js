@@ -8,31 +8,87 @@
  * a balance update or timeout.
  */
 
-(function() {
+var Widget = (function() {
 
   'use strict';
 
   var costcontrol;
-  window.addEventListener('DOMContentLoaded', function _onDOMReady() {
-    checkSIMChange();
+  function onReady() {
+    var mobileConnection = window.navigator.mozMobileConnection;
+    var cardState = checkCardState();
+    var iccid = mobileConnection.iccInfo.iccid;
 
-    CostControl.getInstance(function _onCostControlReady(instance) {
-      costcontrol = instance;
-      setupWidget();
-    });
-  });
+    // SIM not ready
+    if (cardState !== 'ready') {
+      debug('SIM not ready:', mobileConnection.cardState);
+      mobileConnection.oncardstatechange = onReady;
+
+    // SIM is ready, but ICC info is not ready yet
+    } else if (!Common.isValidICCID(iccid)) {
+      debug('ICC info not ready yet');
+      mobileConnection.oniccinfochange = onReady;
+
+    // All ready
+    } else {
+      debug('SIM ready. ICCID:', iccid);
+      mobileConnection.oncardstatechange = undefined;
+      mobileConnection.oniccinfochange = undefined;
+      startWidget();
+    }
+  };
+
+  // Check the card status. Return 'ready' if all OK or take actions for
+  // special situations such as 'pin/puk locked' or 'absent'.
+  function checkCardState() {
+    var mobileConnection = window.navigator.mozMobileConnection;
+    var state, cardState;
+    state = cardState = mobileConnection.cardState;
+
+    // SIM is absent
+    if (cardState === 'absent') {
+      debug('There is no SIM');
+      showSimError('no-sim2');
+
+    // SIM is locked
+    } else if (
+      cardState === 'pinRequired' ||
+      cardState === 'pukRequired'
+    ) {
+      showSimError('sim-locked');
+      state = 'locked';
+    }
+
+    return state;
+  }
+
+  function startWidget() {
+    function _onNoICCID() {
+      console.error('checkSIMChange() failed. Impossible to ensure consistent' +
+                    'data. Aborting start up.');
+      showSimError('no-sim2');
+    }
+
+    Common.checkSIMChange(function _onSIMChecked() {
+      CostControl.getInstance(function _onCostControlReady(instance) {
+        costcontrol = instance;
+        setupWidget();
+      });
+    }, _onNoICCID);
+  }
 
   window.addEventListener('localized', function _onLocalize() {
-    if (initialized)
+    if (initialized) {
       updateUI();
+    }
   });
 
-  var initialized, widget, leftPanel, rightPanel, views = {};
+  var initialized, widget, leftPanel, rightPanel, fte, views = {};
   function setupWidget() {
     // HTML entities
     widget = document.getElementById('cost-control');
     leftPanel = document.getElementById('left-panel');
     rightPanel = document.getElementById('right-panel');
+    fte = document.getElementById('fte-view');
     views.dataUsage = document.getElementById('datausage-view');
     views.limitedDataUsage = document.getElementById('datausage-limit-view');
     views.telephony = document.getElementById('telephony-view');
@@ -42,14 +98,25 @@
     ConfigManager.observe('lastBalance', onBalance, true);
     ConfigManager.observe('waitingForBalance', onErrors, true);
     ConfigManager.observe('errors', onErrors, true);
+    ConfigManager.observe('lastDataReset', onReset, true);
+    ConfigManager.observe('lastTelephonyReset', onReset, true);
 
     // Update UI when visible
     document.addEventListener('mozvisibilitychange',
       function _onVisibilityChange(evt) {
-        if (!document.mozHidden && initialized)
+        if (!document.mozHidden && initialized &&
+            checkCardState() === 'ready') {
           updateUI();
+        }
       }
     );
+
+    // Update data usage on network activity
+    window.addEventListener('hashchange', function _onHashChange() {
+      if (window.location.hash.split('#')[1] === 'update') {
+        updateUI(true); // update only data usage
+      }
+    });
 
     // Open application with the proper view
     views.balance.addEventListener('click',
@@ -68,15 +135,15 @@
       }
     );
 
-    updateUI();
     initialized = true;
+    updateUI();
   }
 
   // BALANCE ACTIONS
 
   // On balance update received
   function onBalance(balance, old, key, settings) {
-    debug('Balance received: ' + JSON.stringify(balance) + '!');
+    debug('Balance received:', balance);
     setBalanceMode('default');
     updateBalance(balance, settings.lowLimit && settings.lowLimitThreshold);
     debug('Balance updated!');
@@ -84,8 +151,9 @@
 
   // On balance update fail
   function onErrors(errors, old, key, settings) {
-    if (!errors['BALANCE_TIMEOUT'])
+    if (!errors['BALANCE_TIMEOUT']) {
       return;
+    }
     debug('Balance timeout!');
 
     setBalanceMode('warning');
@@ -93,42 +161,95 @@
     ConfigManager.setOption({errors: errors});
   }
 
+  // On reset telephony or data usage
+  function onReset(value, old, key, settings) {
+    updateUI();
+  }
+
   // USER INTERFACE
 
-  var currentMode;
-  function updateUI() {
+  // Reuse fte panel to display errors
+  function showSimError(status) {
+    var fte = document.getElementById('fte-view');
+    var leftPanel = document.getElementById('left-panel');
+    var rightPanel = document.getElementById('right-panel');
+
+    fte.setAttribute('aria-hidden', false);
+    leftPanel.setAttribute('aria-hidden', true);
+    rightPanel.setAttribute('aria-hidden', true);
+
+    var className = 'widget-' + status;
+    document.getElementById('fte-icon').classList.add(className);
+    fte.querySelector('p:first-child').textContent = _(className + '-heading');
+    fte.querySelector('p:last-child').textContent = _(className + '-meta');
+  }
+
+  function setupFte(provider, mode) {
+
+    fte.setAttribute('aria-hidden', false);
+    leftPanel.setAttribute('aria-hidden', true);
+    rightPanel.setAttribute('aria-hidden', true);
+
+    fte.addEventListener('click', function launchFte() {
+      fte.removeEventListener('click', launchFte);
+      var activity = new MozActivity({ name: 'costcontrol/balance' });
+    });
+
+    var keyLookup = {
+        PREPAID: 'widget-authed-sim',
+        POSTPAID: 'widget-authed-sim',
+        DATA_USAGE_ONLY: 'widget-nonauthed-sim'
+    };
+    var simKey = keyLookup[mode];
+
+    document.getElementById('fte-icon').className = 'icon ' + simKey;
+    fte.querySelector('p:first-child').textContent = _(simKey + '-heading',
+                                                     { provider: provider });
+    fte.querySelector('p:last-child').textContent = _(simKey + '-meta');
+  }
+
+  var hashMark = 0;
+  function updateUI(updateOnlyDataUsage) {
     ConfigManager.requestAll(function _onInfo(configuration, settings) {
-      var mode = costcontrol.getApplicationMode(settings);
-      debug('Widget UI mode: ' + mode);
+      var mode = ConfigManager.getApplicationMode();
+      debug('Widget UI mode:', mode);
 
       var isPrepaid = (mode === 'PREPAID');
       var isDataUsageOnly = (mode === 'DATA_USAGE_ONLY');
 
+      // Show fte mode widget
+      if (settings.fte) {
+        setupFte(configuration.provider, mode);
+        debug('Widget in FTE mode');
+        return;
+      }
+
       // Layout
+      fte.setAttribute('aria-hidden', true);
+      leftPanel.setAttribute('aria-hidden', false);
+      rightPanel.setAttribute('aria-hidden', false);
+
       var isLimited = settings.dataLimit;
       views.dataUsage.setAttribute('aria-hidden', isLimited);
       views.limitedDataUsage.setAttribute('aria-hidden', !isLimited);
 
-      if (currentMode !== mode) {
-        // Always data usage
-        leftPanel.setAttribute('aria-hidden', isDataUsageOnly);
+      // Always data usage
+      leftPanel.setAttribute('aria-hidden', isDataUsageOnly);
 
-        // And the other view if applies...
-        if (isDataUsageOnly) {
-          widget.classList.add('full');
+      // And the other view if applies...
+      if (isDataUsageOnly) {
+        widget.classList.add('full');
 
-        } else {
-          widget.classList.remove('full');
-          views.balance.setAttribute('aria-hidden', !isPrepaid);
-          views.telephony.setAttribute('aria-hidden', isPrepaid);
-        }
-        currentMode = mode;
+      } else {
+        widget.classList.remove('full');
+        views.balance.setAttribute('aria-hidden', !isPrepaid);
+        views.telephony.setAttribute('aria-hidden', isPrepaid);
       }
 
       // Content for data statistics
       var requestObj = { type: 'datausage' };
       costcontrol.request(requestObj, function _onDataStatistics(result) {
-        debug(JSON.stringify(result));
+        debug(result);
         var stats = result.data;
         var data = roundData(stats.mobile.total);
         if (isLimited) {
@@ -156,8 +277,8 @@
           if (limitTresspased) {
             views.limitedDataUsage.classList.add('reached-limit');
 
-          //  80% of the limit reached
-          } else if (current >= limit * 0.8) {
+          //  Warning percentage of the limit reached
+          } else if (current >= limit * costcontrol.getDataUsageWarning()) {
             views.limitedDataUsage.classList.add('nearby-limit');
           }
 
@@ -172,29 +293,38 @@
             value: limitText[0],
             unit: limitText[1]
           });
-          leftTag.innerHTML = limitTresspased ? _('limit-passed') : _('used');
-          leftValue.innerHTML = limitTresspased ? limitText : currentText;
-          rightTag.innerHTML = limitTresspased ? _('used') : _('limit');
-          rightValue.innerHTML = limitTresspased ? currentText : limitText;
+          leftTag.textContent = limitTresspased ? _('limit-passed') : _('used');
+          leftValue.textContent = limitTresspased ? limitText : currentText;
+          rightTag.textContent = limitTresspased ? _('used') : _('limit');
+          rightValue.textContent = limitTresspased ? currentText : limitText;
 
         } else {
           // Texts
-          document.getElementById('mobile-usage-value').innerHTML =
+          document.getElementById('mobile-usage-value').textContent =
             _('magnitude', { value: data[0], unit: data[1] });
-          views.dataUsage.querySelector('.meta').innerHTML =
-            formatTimeHTML(stats.timestamp);
+          var meta = views.dataUsage.querySelector('.meta');
+          meta.innerHTML = '';
+          meta.appendChild(formatTimeHTML(stats.timestamp));
         }
+        checkDataUsageNotification(settings, stats.mobile.total,
+          // inform driver in system we are finished to update the widget
+          function _done() {
+            debug('Data usage notification checked!');
+            hashMark = 1 - hashMark; // toogle between 0 and 1
+            window.location.hash = '#updateDone#' + hashMark;
+          }
+        );
       });
 
       // Content for balance or telephony
-      if (!isDataUsageOnly) {
-        if (currentMode === 'PREPAID') {
+      if (!isDataUsageOnly && !updateOnlyDataUsage) {
+        if (mode === 'PREPAID') {
           updateBalance(settings.lastBalance,
                         settings.lowLimit && settings.lowLimitThreshold);
 
           requestObj = { type: 'balance' };
           costcontrol.request(requestObj, function _onRequest(result) {
-            debug(JSON.stringify(result));
+            debug(result);
             var status = result.status;
             var balance = result.data;
             setBalanceMode(status === 'error' ? 'warning' : 'updating');
@@ -202,24 +332,25 @@
                           settings.lowLimit && settings.lowLimitThreshold);
           });
 
-        } else if (currentMode === 'POSTPAID') {
+        } else if (mode === 'POSTPAID') {
           requestObj = { type: 'telephony' };
           costcontrol.request(requestObj, function _onRequest(result) {
             var activity = result.data;
-            document.getElementById('telephony-calltime').innerHTML =
+            document.getElementById('telephony-calltime').textContent =
               _('magnitude', {
-                value: (activity.calltime / 60).toFixed(0),
+                value: computeTelephonyMinutes(activity),
                 unit: 'min'
               }
             );
-            document.getElementById('telephony-smscount').innerHTML =
+            document.getElementById('telephony-smscount').textContent =
               _('magnitude', {
                 value: activity.smscount,
                 unit: 'SMS'
               }
             );
-            views.telephony.querySelector('.meta').innerHTML =
-              formatTimeHTML(activity.timestamp);
+            var meta = views.telephony.querySelector('.meta');
+            meta.innerHTML = '';
+            meta.appendChild(formatTimeHTML(activity.timestamp));
           });
         }
       }
@@ -231,23 +362,27 @@
 
     // Balance not available
     if (balance === null) {
-      debug('Balance not available');
-      document.getElementById('balance-credit').innerHTML = _('not-available');
+      debug('Balance not available.');
+      document.getElementById('balance-credit')
+        .textContent = _('not-available');
       views.balance.querySelector('.meta').innerHTML = '';
       return;
     }
 
     // Balance available
-    document.getElementById('balance-credit').innerHTML = _('currency', {
+    document.getElementById('balance-credit').textContent = _('currency', {
       value: balance.balance,
       currency: ConfigManager.configuration.credit.currency
     });
 
     // Timestamp
-    var timeContent = formatTimeHTML(balance.timestamp);
-    if (views.balance.classList.contains('updating'))
-      timeContent = _('updating') + '...';
-    views.balance.querySelector('.meta').innerHTML = timeContent;
+    var meta = views.balance.querySelector('.meta');
+    if (views.balance.classList.contains('updating')) {
+      meta.textContent = _('updating-ellipsis');
+    } else {
+      meta.innerHTML = '';
+      meta.appendChild(formatTimeHTML(balance.timestamp));
+    }
 
     // Limits: reaching zero / low limit
     if (balance.balance === 0) {
@@ -256,10 +391,11 @@
     } else {
       views.balance.classList.remove('no-credit');
 
-      if (limit && balance.balance < limit)
+      if (limit && balance.balance < limit) {
         views.balance.classList.add('low-credit');
-      else
+      } else {
         views.balance.classList.remove('low-credit');
+      }
     }
   }
 
@@ -267,18 +403,29 @@
   // Set warning / updating modes
   var lastBalanceMode;
   function setBalanceMode(mode) {
-    if (mode === lastBalanceMode)
+    if (mode === lastBalanceMode) {
       return;
+    }
 
     lastBalanceMode = mode;
     views.balance.classList.remove('updating');
     views.balance.classList.remove('warning');
 
-    if (mode === 'warning')
+    if (mode === 'warning') {
       views.balance.classList.add('warning');
+    }
 
-    if (mode === 'updating')
+    if (mode === 'updating') {
       views.balance.classList.add('updating');
+    }
   }
 
+  return {
+    init: function() {
+      Common.waitForDOMAndMessageHandler(window, onReady);
+    }
+  };
+
 }());
+
+Widget.init();

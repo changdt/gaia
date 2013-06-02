@@ -10,26 +10,23 @@ var DataUsageTab = (function() {
   'use strict';
 
   var DAY = 24 * 60 * 60 * 1000;
-  var today = new Date();
-  var tomorrow = new Date(today.getTime() + 1000 * 60 * 60 * 24);
-  toMidnight(tomorrow);
-  var yesterday = new Date(today.getTime() - 1000 * 60 * 60 * 24);
-  toMidnight(yesterday);
+  var NEVER_PERIOD = 30 * DAY;
+  var NEVER_ANCHOR = 21 * DAY;
 
   var graphicArea, graphicPattern;
-  var wifiLayer, mobileLayer;
+  var wifiLayer, mobileLayer, warningLayer, limitsLayer;
   var wifiOverview, mobileOverview;
   var wifiToggle, mobileToggle;
   var wifiItem, mobileItem;
 
-  var tabmanager, costcontrol, initialized, model;
-  function setupTab(tmgr) {
-    if (initialized)
+  var costcontrol, initialized, model;
+  function setupTab() {
+    if (initialized) {
       return;
+    }
 
     CostControl.getInstance(function _onCostControl(instance) {
       costcontrol = instance;
-      tabmanager = tmgr;
 
       // HTML entities
       graphicArea = document.getElementById('graphic-area');
@@ -42,14 +39,10 @@ var DataUsageTab = (function() {
       mobileOverview = document.getElementById('mobileOverview');
       wifiToggle = document.getElementById('wifiCheck');
       mobileToggle = document.getElementById('mobileCheck');
+      warningLayer = document.getElementById('warning-layer');
+      limitsLayer = document.getElementById('limits-layer');
 
       window.addEventListener('localized', localize);
-
-      // Configure showing tab
-      var dataUsageTab = document.getElementById('datausage-tab-filter');
-      dataUsageTab.addEventListener('click', function _showTab() {
-        tabmanager.changeViewTo('datausage-tab');
-      });
 
       // Update and chart visibility
       document.addEventListener('mozvisibilitychange', updateWhenVisible);
@@ -61,7 +54,6 @@ var DataUsageTab = (function() {
         debug('First time setup for model');
         var lastDataReset = settings.lastDataReset;
         var nextReset = settings.nextReset;
-        trackingPeriod = settings.trackingPeriod;
         model = {
           height: graphicArea.clientHeight,
           width: graphicArea.clientWidth,
@@ -73,11 +65,8 @@ var DataUsageTab = (function() {
               margin: 0.20
             },
             X: {
-              lower: lastDataReset ? new Date(lastDataReset) :
-                                     new Date(yesterday),
-              upper: nextReset ? new Date(nextReset.getTime()) :
-                                 new Date(tomorrow),
-              today: today
+              lower: calculateLowerDate(settings),
+              upper: calculateUpperDate(settings)
             }
           },
           limits: {
@@ -93,16 +82,13 @@ var DataUsageTab = (function() {
             }
           }
         };
-
         ConfigManager.observe('dataLimit', toggleDataLimit, true);
         ConfigManager.observe('dataLimitValue', setDataLimit, true);
         ConfigManager.observe('lastDataReset', changeLastReset, true);
         ConfigManager.observe('nextReset', changeNextReset, true);
 
-        expandModel(model);
-        requestDataUsage();
-
         initialized = true;
+        requestDataUsage();
       });
     });
   }
@@ -117,8 +103,9 @@ var DataUsageTab = (function() {
   }
 
   function finalize() {
-    if (!initialized)
+    if (!initialized) {
       return;
+    }
 
     document.removeEventListener('mozvisibilitychange', updateWhenVisible);
     wifiToggle.removeEventListener('click', toggleWifi);
@@ -133,8 +120,9 @@ var DataUsageTab = (function() {
 
   function getLimitInBytes(settings) {
     var multiplier = 1000000; // MB
-    if (settings.dataLimitUnit === 'GB')
+    if (settings.dataLimitUnit === 'GB') {
       multiplier = 1000000000; // GB
+    }
 
     var value = settings.dataLimitValue;
     return (value && value !== 0) ? value * multiplier : null;
@@ -144,40 +132,46 @@ var DataUsageTab = (function() {
 
   // On visibility change
   function updateWhenVisible(evt) {
-    if (!document.mozHidden)
+    if (!document.mozHidden) {
       requestDataUsage();
+    }
   }
 
   function requestDataUsage() {
-    var requestObj = { type: 'datausage' };
-    costcontrol.request(requestObj, updateCharts);
+    ConfigManager.requestSettings(function _onSettings(settings) {
+      var requestObj = { type: 'datausage' };
+      costcontrol.request(requestObj, updateCharts);
+    });
   }
 
   function updateCharts(result) {
     if (result.status === 'success') {
-      debug('Updating model');
-      var modelData = result.data;
-      model.axis.X = {
-        lower: modelData.start,
-        upper: modelData.end,
-        today: modelData.today
-      };
-      model.data.wifi.samples = modelData.wifi.samples;
-      model.data.wifi.total = modelData.wifi.total;
-      model.data.mobile.samples = modelData.mobile.samples;
-      model.data.mobile.total = modelData.mobile.total;
+      ConfigManager.requestSettings(function _onSettings(settings) {
+        debug('Updating model');
+        var modelData = result.data;
+        model.data.wifi.samples = modelData.wifi.samples;
+        model.data.wifi.total = modelData.wifi.total;
+        model.data.mobile.samples = modelData.mobile.samples;
+        model.data.mobile.total = modelData.mobile.total;
+        model.axis.X.upper = calculateUpperDate(settings);
+        model.axis.X.lower = calculateLowerDate(settings);
+        expandModel(model);
 
-      expandModel(model);
+        debug('Rendering');
+        updateUI();
+        checkDataUsageNotification(settings, modelData.mobile.total);
+      });
+
+    } else {
+      console.error('Error requesting data usage. This should not happen.');
     }
-
-    debug('Rendering');
-    updateUI();
   }
 
   // OBSERVERS
 
   function toggleDataLimit(value) {
     model.limits.enabled = value;
+    drawBackgroundLayer(model);
     drawAxisLayer(model);
     drawLimits(model);
     drawWarningOverlay(model);
@@ -190,38 +184,106 @@ var DataUsageTab = (function() {
   }
 
   function changeLastReset(value) {
-    model.axis.X.lower = value ? new Date(value) : new Date(yesterday);
+    requestDataUsage();
+  }
+
+  function changeNextReset(value, old, key, settings) {
+    model.axis.X.upper = calculateUpperDate(settings);
+    model.axis.X.lower = calculateLowerDate(settings);
     expandModel(model);
     updateUI();
   }
 
-  function changeNextReset(value, old, key, settings) {
-    trackingPeriod = settings.trackingPeriod;
-    model.axis.X.upper = value ? new Date(value.getTime() - DAY) :
-                                 new Date(tomorrow);
-    expandModel(model);
-    updateUI();
+  function calculateUpperDate(settings) {
+    var trackingPeriod = settings.trackingPeriod;
+    var nextReset = settings.nextReset;
+    if (trackingPeriod !== 'never') {
+      return new Date(nextReset.getTime() - DAY);
+    }
+
+    var lastReset = settings.lastDataReset;
+    var offset = today.getTime() - lastReset.getTime();
+    var upperDate = new Date(lastReset.getTime() + NEVER_PERIOD);
+    if (offset >= NEVER_ANCHOR) {
+      upperDate = new Date(today.getTime() + (NEVER_PERIOD - NEVER_ANCHOR));
+    }
+
+    debug('Upper date:', upperDate);
+    return upperDate;
+  }
+
+  function calculateLowerDate(settings) {
+    var lowerDate = toMidnight(new Date());
+    var nextReset = settings.nextReset;
+    var trackingPeriod = settings.trackingPeriod;
+
+    if (trackingPeriod === 'weekly') {
+      lowerDate.setTime(nextReset.getTime() - (7 * DAY));
+
+    } else if (trackingPeriod === 'monthly') {
+      var newMonth = nextReset.getMonth() - 1;
+      var newYear = nextReset.getFullYear();
+      if (newMonth < 0) {
+        newMonth = 11;
+        newYear--;
+      }
+
+      lowerDate.setDate(nextReset.getDate());
+      lowerDate.setMonth(newMonth);
+      lowerDate.setYear(newYear);
+
+    } else {
+      var lastReset = lowerDate = settings.lastDataReset;
+      var offset = today.getTime() - lastReset.getTime();
+      if (offset >= NEVER_ANCHOR) {
+        lowerDate = new Date(today.getTime() - NEVER_ANCHOR);
+      }
+    }
+
+    debug('Lower date:', lowerDate);
+    return lowerDate;
+  }
+
+  // Return true if a and b not differ more than threshold
+  function same(a, b, threshold) {
+    threshold = threshold || 0;
+    return Math.abs(a - b) <= threshold;
   }
 
   // USER INTERFACE
 
   // On tapping on wifi toggle
   function toggleWifi() {
-    wifiLayer.setAttribute('aria-hidden', !wifiToggle.checked);
-    wifiItem.setAttribute('aria-disabled', !wifiToggle.checked);
+    var isChecked = wifiToggle.checked;
+    wifiLayer.setAttribute('aria-hidden', !isChecked);
+    wifiItem.setAttribute('aria-disabled', !isChecked);
   }
 
   // On tapping on mobile toggle
   function toggleMobile() {
-    mobileLayer.setAttribute('aria-hidden', !mobileToggle.checked);
-    mobileItem.setAttribute('aria-disabled', !mobileToggle.checked);
+    var isChecked = mobileToggle.checked;
+    mobileLayer.setAttribute('aria-hidden', !isChecked);
+    warningLayer.setAttribute('aria-hidden', !isChecked);
+    limitsLayer.setAttribute('aria-hidden', !isChecked);
+    mobileItem.setAttribute('aria-disabled', !isChecked);
+    drawBackgroundLayer(model);
+    drawAxisLayer(model);
+    drawLimits(model);
   }
 
   // Expand the model with some computed values
+  var today = toMidnight(new Date());
+  var CHART_BG_RATIO = 0.87;
   function expandModel(base) {
 
+    // Update today
+    today = toMidnight(new Date());
+
     // Graphic settings
-    base.originY = Math.floor(base.height * 5 / 6);
+    base.originY = Math.floor(base.height * CHART_BG_RATIO);
+
+    // Today value
+    base.axis.X.today = today;
 
     // Normalize today
     toMidnight(base.axis.X.today);
@@ -239,7 +301,8 @@ var DataUsageTab = (function() {
     };
 
     // Y max value
-    base.axis.Y.maxValue = Math.max(base.limits.value,
+    var limitEnabled = true; // XXX: model.limits.enabled;
+    base.axis.Y.maxValue = Math.max(limitEnabled ? base.limits.value : 0,
                                     base.data.mobile.total,
                                     base.data.wifi.total);
 
@@ -280,36 +343,48 @@ var DataUsageTab = (function() {
     var width = canvas.width = model.width;
     var ctx = canvas.getContext('2d');
 
+    ctx.save();
+
     // White bg
     ctx.fillStyle = 'white';
     ctx.fillRect(0, 0, width, model.originY);
 
     // Horizontal lines every step
     var step = model.axis.Y.step;
-    ctx.beginPath();
+    var limitY = model.axis.Y.get(model.limits.value);
     ctx.strokeStyle = '#e0e0e0';
-    ctx.lineWidth = 2;
-    for (var y = 0.5 + model.originY - step; y > step; y -= step) {
-      ctx.moveTo(model.originX, y);
-      ctx.lineTo(model.endX, y);
+    ctx.lineWidth = 1;
+    var displayLimit = model.limits.enabled && mobileToggle.checked;
+    for (var y = model.originY - step; y > step; y -= step) {
+      if (displayLimit && same(y, limitY, 0.1)) {
+        continue;
+      }
+      var drawY = Math.floor(y) - 0.5;
+      ctx.beginPath();
+      ctx.moveTo(model.originX, drawY);
+      ctx.lineTo(model.endX, drawY);
       ctx.stroke();
     }
 
     // Vertical lines every day
-    var day = 1000 * 60 * 60 * 24; // milliseconds in a day
-    var days = (model.axis.X.upper - model.axis.X.lower) / day;
+    var days = (model.axis.X.upper - model.axis.X.lower) / DAY;
     var step = model.axis.X.len / days;
-    ctx.beginPath();
-    ctx.strokeStyle = '#e0e0e0';
+    ctx.strokeStyle = '#eeeeee';
     ctx.lineWidth = 1;
     for (var x = model.originX; x <= model.endX; x += step) {
-      ctx.moveTo(x, model.originY);
-      ctx.lineTo(x, 0);
+      var drawX = Math.floor(x) + 0.5;
+      ctx.beginPath();
+      ctx.moveTo(drawX, model.originY);
+      ctx.lineTo(drawX, 0);
       ctx.stroke();
     }
+
+    ctx.restore();
   }
 
   var todayLabel = {};
+  var FONTSIZE = 12;
+  var TODAY_FONTSIZE = 14;
   function drawTodayLayer(model) {
     var canvas = document.getElementById('today-layer');
     var height = canvas.height = model.height;
@@ -317,15 +392,16 @@ var DataUsageTab = (function() {
     var ctx = canvas.getContext('2d');
 
     // Compute the X offset
-    var offsetX = model.axis.X.get(model.axis.X.today) + 0.5;
+    var offsetX = model.axis.X.get(model.axis.X.today);
 
     // Configure Centered today text
-    var fontsize = 14;
     var marginTop = 10;
-    var todayTag = model.axis.X.today.toLocaleFormat('%b %d').toUpperCase();
+
+    var todayTag = formatChartDate(model.axis.X.today);
 
     // Render the text
-    ctx.font = '600 ' + fontsize + 'px Arial';
+    ctx.fontWeight = '600';
+    ctx.fontSize = TODAY_FONTSIZE + 'px';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
 
@@ -333,14 +409,21 @@ var DataUsageTab = (function() {
     var metrics = ctx.measureText(todayTag);
     todayLabel.x0 = offsetX - metrics.width / 2;
     todayLabel.x1 = offsetX + metrics.width / 2;
-    if (todayLabel.x1 > model.endX)
+    if (todayLabel.x1 > model.endX) {
       ctx.textAlign = 'right';
+    }
 
     ctx.fillStyle = 'black';
     ctx.fillText(todayTag, offsetX, model.originY + marginTop);
   }
 
-  var trackingPeriod;
+  function formatChartDate(date) {
+    return _('verbose-chart-date-format', {
+      'monthday-number': date.getDate(),
+      'em-month': _('em-month-' + date.getMonth())
+    });
+  }
+
   function drawAxisLayer(model) {
 
     var canvas = document.getElementById('axis-layer');
@@ -351,10 +434,10 @@ var DataUsageTab = (function() {
     // Start drawing Y axis
     var step = model.axis.Y.step;
     var dataStep = model.axis.Y.upper - model.axis.Y.maxValue;
-    var offsetX = model.originX / 2, marginBottom = 4;
-    var fontsize = 14;
-    ctx.font = '500 ' + fontsize + 'px Arial';
-    ctx.textAlign = 'center';
+    var offsetX = model.originX - 4, marginBottom = 4;
+    ctx.fontSize = FONTSIZE + 'px';
+    ctx.textAlign = 'right';
+    var displayLimit = mobileToggle.checked && model.limits.enabled;
     var lastUnit;
     for (var y = 0.5 + model.originY, value = 0;
          y > step; y -= step, value += dataStep) {
@@ -362,6 +445,7 @@ var DataUsageTab = (function() {
       // First X label for 0 is aligned with the bottom
       if (value === 0) {
         ctx.textBaseline = 'bottom';
+        ctx.fillStyle = '#6a6a6a';
         ctx.fillText(formatData(smartRound(0, 0)), offsetX, y - 2.5);
         continue;
       }
@@ -369,40 +453,40 @@ var DataUsageTab = (function() {
       // Rest of labels are aligned with the middle
       var rounded = smartRound(value, 0);
       var v = rounded[0];
-      var u = rounded[1][0];
+      var u = rounded[1];
       var label = v;
-      if (lastUnit !== u)
+      if (lastUnit !== u) {
         label = formatData([v, u]);
+      }
 
       lastUnit = u;
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = (value === model.limits.value) && model.limits.enabled ?
+      ctx.fillStyle = displayLimit &&
+                      (value === model.limits.value) &&
+                      model.limits.enabled ?
                       '#b50202' : '#6a6a6a';
       ctx.fillText(label, offsetX, y);
     }
 
     // Now the X axis
-    if (trackingPeriod === 'never')
-      return;
-
     ctx.fillStyle = '#6a6a6a';
     var marginTop = 10;
 
     // Left tag
-    var leftTag =
-      model.axis.X.lower.toLocaleFormat('%b %d').toUpperCase();
-    ctx.font = '600 ' + fontsize + 'px Arial';
+    var leftTag = formatChartDate(model.axis.X.lower);
+    ctx.fontWeight = '600';
+    ctx.fontSize = FONTSIZE + 'px';
     ctx.textBaseline = 'top';
     ctx.textAlign = 'start';
 
     var isBelowToday = todayLabel.x0 <=
                        model.originX + ctx.measureText(leftTag).width;
-    if (!isBelowToday)
+    if (!isBelowToday) {
       ctx.fillText(leftTag, model.originX, model.originY + marginTop);
+    }
 
     // Right tag
-    var rightTag =
-      model.axis.X.upper.toLocaleFormat('%b %d').toUpperCase();
+    var rightTag = formatChartDate(model.axis.X.upper);
     ctx.textAlign = 'end';
 
     isBelowToday = todayLabel.x1 >=
@@ -413,51 +497,62 @@ var DataUsageTab = (function() {
   }
 
   function drawLimits(model) {
-    var enabled = model.limits.enabled;
     var set = model.limits.value;
-    var color = enabled ? '#b50202' : '#878787';
+    var color = '#b50202';
 
     var canvas = document.getElementById('limits-layer');
     var height = canvas.height = model.height;
     var width = canvas.width = model.width;
     var ctx = canvas.getContext('2d');
-    ctx.font = '600 ' + 12 + 'px Arial';
 
-    var fontsize = 12;
+    var displayLimit = mobileToggle.checked && model.limits.enabled;
+    if (!displayLimit) {
+      return;
+    }
+
+    ctx.save();
+
     var marginLeft = 4;
     var marginTop = 1;
-    var offsetY = set ? Math.floor(model.axis.Y.get(model.limits.value)) :
-                        fontsize + 2 * marginTop;
+    var offsetY = set ? model.axis.Y.get(model.limits.value) :
+                        FONTSIZE + 2 * marginTop;
+
+    ctx.fontWeight = '600';
+    ctx.fontSize = FONTSIZE + 'px';
 
     // The dashed limit line
     var lineLength = 15;
     var gapLength = 7;
     ctx.strokeStyle = color;
     ctx.beginPath();
-    for (var x = model.originX, y = offsetY - 0.5;
+    for (var x = model.originX, drawY = Math.floor(offsetY) - 0.5;
          x < model.endX; x += gapLength) {
-      ctx.moveTo(x, y);
-      ctx.lineTo(Math.min(x += lineLength, model.endX), y);
+      ctx.moveTo(x, drawY);
+      ctx.lineTo(Math.min(x += lineLength, model.endX), drawY);
     }
     ctx.stroke();
+
+    ctx.restore();
   }
 
   function drawWifiGraphic(model) {
     var samples = model.data.wifi.samples;
-    if (!samples)
+    if (!samples) {
       return;
+    }
 
     var canvas = document.getElementById('wifi-layer');
     var height = canvas.height = model.height;
     var width = canvas.width = model.width;
     var ctx = canvas.getContext('2d');
 
-    // Fill
+    // Style
     ctx.fillStyle = '#cbd936';
     ctx.strokeStyle = '#8b9052';
     ctx.lineWidth = 2;
     ctx.moveTo(model.originX, model.originY);
-    var sum = 0; var x, y, slopeX;
+    var today = toMidnight(new Date());
+    var sum = 0; var x, y = model.originY;
     var lastX = model.originX, lastY = model.axis.Y.get(sum);
     for (var i = 0, len = samples.length; i < len; i++) {
 
@@ -465,46 +560,69 @@ var DataUsageTab = (function() {
       if (sample.value == undefined) {
         lastX = x = model.axis.X.get(sample.date);
         ctx.moveTo(x, y);
-        continue;
+
+      } else {
+        if (i === 0) {
+          lastX = model.axis.X.get(sample.date);
+        }
+
+        sum += sample.value;
+        x = model.axis.X.get(sample.date);
+        y = model.axis.Y.get(sum);
+
+        clipAndDrawSegment(ctx, model, lastX, lastY, x, y);
+
+        lastX = x;
+        lastY = y;
       }
 
-      sum += sample.value;
-      x = model.axis.X.get(sample.date);
-      slopeX = x + 0.5; // Used instead of x, avoid some graphic errors
-      y = model.axis.Y.get(sum);
+      if (today.getTime() === toMidnight(new Date(sample.date)).getTime() &&
+          x >= model.originX) {
+        drawTodayMark(ctx, x, y, '#8b9052');
+      }
+    }
+  }
+
+  function drawTodayMark(ctx, x, y, color) {
+    ctx.save();
+    var radius = 4;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Check if the segment of the graph is inside chart area. If so, draw it
+  function clipAndDrawSegment(ctx, model, x0, y0, x1, y1) {
+    if (x0 >= model.originX && x1 < model.endX) {
+      var x0Fixed = Math.floor(x0) - 0.5;
+      var x1Fixed = Math.floor(x1) + 0.5;
 
       // Fill
+      ctx.globalCompositeOperation = 'destination-over';
       ctx.beginPath();
-      ctx.lineTo(slopeX, y);
-      ctx.lineTo(slopeX, model.originY);
-      ctx.lineTo(lastX, model.originY);
-      ctx.lineTo(lastX, lastY);
-      ctx.moveTo(slopeX, y);
+      ctx.lineTo(x1Fixed, y1);
+      ctx.lineTo(x1Fixed, model.originY);
+      ctx.lineTo(x0Fixed, model.originY);
+      ctx.lineTo(x0Fixed, y0);
+      ctx.moveTo(x1Fixed, y0);
       ctx.fill();
 
       // Stroke
+      ctx.globalCompositeOperation = 'source-over';
       ctx.beginPath();
-      ctx.moveTo(lastX, lastY);
-      ctx.lineTo(x, y);
+      ctx.moveTo(x0Fixed, y0);
+      ctx.lineTo(x1Fixed, y1);
       ctx.stroke();
-
-      lastX = x;
-      lastY = y;
     }
-
-    // The circle
-    var radius = 4;
-    ctx.fillStyle = '#8b9052';
-    var todayWifi = model.data.wifi.total;
-    ctx.beginPath();
-    ctx.arc(x, model.axis.Y.get(todayWifi), radius, 0, 2 * Math.PI);
-    ctx.fill();
   }
 
   function drawMobileGraphic(model) {
     var samples = model.data.mobile.samples;
-    if (!samples)
+    if (!samples) {
       return;
+    }
 
     var canvas = document.getElementById('mobile-layer');
     var height = canvas.height = model.height;
@@ -515,53 +633,40 @@ var DataUsageTab = (function() {
     ctx.strokeStyle = '#762d4a';
     ctx.lineWidth = 2;
 
-    var sum = 0; var x, y, slopeX;
+    var today = toMidnight(new Date());
+    var sum = 0; var x, y = model.originY;
     var lastX = model.originX, lastY = model.axis.Y.get(sum);
     for (var i = 0, len = samples.length; i < len; i++) {
       var sample = samples[i];
       if (sample.value == undefined) {
         lastX = x = model.axis.X.get(sample.date);
         ctx.moveTo(x, y);
-        continue;
+
+      } else {
+        if (i === 0) {
+          lastX = model.axis.X.get(sample.date);
+        }
+
+        sum += sample.value;
+        x = model.axis.X.get(sample.date);
+        y = model.axis.Y.get(sum);
+
+        clipAndDrawSegment(ctx, model, lastX, lastY, x, y);
+
+        lastX = x;
+        lastY = y;
       }
 
-      sum += sample.value;
-      x = model.axis.X.get(sample.date);
-      slopeX = x + 0.5;
-      y = model.axis.Y.get(sum);
-
-      // Fill
-      ctx.beginPath();
-      ctx.lineTo(slopeX, y);
-      ctx.lineTo(slopeX, model.originY);
-      ctx.lineTo(lastX, model.originY);
-      ctx.lineTo(lastX, lastY);
-      ctx.moveTo(slopeX, y);
-      ctx.fill();
-
-      // Stroke
-      ctx.beginPath();
-      ctx.moveTo(lastX, lastY);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-
-      lastX = x;
-      lastY = y;
+      if (today.getTime() === toMidnight(new Date(sample.date)).getTime() &&
+          x >= model.originX) {
+        drawTodayMark(ctx, x, y, '#762d4a');
+      }
     }
 
     var pattern = ctx.createPattern(graphicPattern, 'repeat');
     ctx.globalCompositeOperation = 'source-atop';
     ctx.fillStyle = pattern;
     ctx.fillRect(0, 0, width, model.originY);
-
-    // The circle
-    var radius = 4;
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = '#762d4a';
-    var todayMobile = model.data.mobile.total;
-    ctx.beginPath();
-    ctx.arc(x, model.axis.Y.get(todayMobile), radius, 0, 2 * Math.PI);
-    ctx.fill();
   }
 
   function drawWarningOverlay(model) {
@@ -570,13 +675,15 @@ var DataUsageTab = (function() {
     var width = canvas.width = model.width;
     var ctx = canvas.getContext('2d');
 
-    if (!model.limits.enabled || model.limits.value === null)
+    if (!model.limits.enabled || model.limits.value === null) {
       return;
+    }
 
     // No problem here
     var mobileUsage = model.data.mobile.total;
-    if (mobileUsage <= model.limits.warningValue)
+    if (mobileUsage <= model.limits.warningValue) {
       return;
+    }
 
     // Warning mode
     if (mobileUsage <= model.limits.value) {
@@ -608,3 +715,5 @@ var DataUsageTab = (function() {
     finalize: finalize
   };
 }());
+
+DataUsageTab.initialize();

@@ -45,7 +45,6 @@ var ModalDialog = {
     // Get all elements initially.
     this.getAllElements();
     var elements = this.elements;
-
     for (var id in elements) {
       if (elements[id].tagName.toLowerCase() == 'button') {
         elements[id].addEventListener('click', this);
@@ -70,7 +69,7 @@ var ModalDialog = {
         break;
 
       case 'click':
-        if (evt.currentTarget.nodeName == "BUTTON" ||
+        if (evt.currentTarget.nodeName == 'BUTTON' ||
             evt.currentTarget == elements.customPromptButtons) {
           evt.preventDefault();
         }
@@ -108,12 +107,14 @@ var ModalDialog = {
       case 'alert':
         elements.alertMessage.innerHTML = message;
         elements.alert.hidden = false;
+        elements.alert.focus();
         break;
 
       case 'prompt':
         elements.prompt.hidden = false;
         elements.promptInput.value = evt.detail.initialValue;
         elements.promptMessage.innerHTML = message;
+        elements.prompt.focus();
         break;
 
       case 'custom-prompt':
@@ -153,11 +154,14 @@ var ModalDialog = {
           // We assume that checkbox custom message is already translated
           checkbox.nextElementSibling.textContent = prompt.checkboxMessage;
         }
+
+        elements.customPrompt.focus();
         break;
 
       case 'confirm':
         elements.confirm.hidden = false;
         elements.confirmMessage.innerHTML = message;
+        elements.confirm.focus();
         break;
     }
   },
@@ -242,5 +246,10 @@ var ModalDialog = {
 
   originHasEvent: function(origin) {
     return origin in this.currentEvents;
+  },
+
+  clear: function ad_clear(origin) {
+    if (this.currentEvents[origin])
+      delete this.currentEvents[origin];
   }
 };

@@ -27,12 +27,14 @@ var UtilityTray = {
 
     window.addEventListener('screenchange', this);
     window.addEventListener('home', this);
+    window.addEventListener('attentionscreenshow', this);
 
     this.overlay.addEventListener('transitionend', this);
   },
 
   handleEvent: function ut_handleEvent(evt) {
     switch (evt.type) {
+      case 'attentionscreenshow':
       case 'home':
         if (this.shown) {
           this.hide();
@@ -85,8 +87,8 @@ var UtilityTray = {
   },
 
   onTouchStart: function ut_onTouchStart(touch) {
-    this.startX = touch.pageX;
     this.startY = touch.pageY;
+
     this.screen.classList.add('utility-tray');
     this.onTouchMove({ pageY: touch.pageY + this.statusbar.offsetHeight });
   },
@@ -119,8 +121,14 @@ var UtilityTray = {
     style.MozTransition = instant ? '' : '-moz-transform 0.2s linear';
     style.MozTransform = 'translateY(0)';
     this.shown = false;
-    if (instant)
+    this.lastY = undefined;
+    this.startY = undefined;
+
+    // If the transition has not started yet there won't be any transitionend
+    // event so let's not wait in order to remove the utility-tray class.
+    if (instant || style.MozTransform == 'translateY(0px)') {
       this.screen.classList.remove('utility-tray');
+    }
 
     if (!alreadyHidden) {
       var evt = document.createEvent('CustomEvent');

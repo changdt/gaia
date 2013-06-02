@@ -5,7 +5,6 @@ html, body {
   padding: 0;
   overflow: hidden !important;
   font-size: 10px;
-  font-family: "MozTT","Moz",sans-serif;
   font-weight: 400;
   user-select: none;
 }
@@ -25,9 +24,7 @@ html, body {
   right: 0;
   bottom: 0;
   overflow-x: auto;
-  background: url(images/bg_top.png) top left no-repeat,
-              url(images/bg_bottom.png) bottom left no-repeat,
-              url(images/bg_1px.png) repeat-y;
+  background: url(images/bg_light.png);
   background-size: 100% auto;
 }
 
@@ -55,7 +52,7 @@ html, body {
   white-space: nowrap;
   margin: 0;
   padding: 1.5rem;
-  border-top: 1px solid #a6a6a6;
+  border-top: 0.1rem solid #a6a6a6;
   background: rgba(0,0,0,0.05);
   display: block;
   overflow: hidden;
@@ -67,8 +64,12 @@ html, body {
   height: 3.5rem;
 }
 
+#nav-bar {
+  z-index: 1;
+}
+
 [role=navigation] button {
-  width: calc((100% - 1rem) / 2);
+  width: calc((100% / 2) - 0.5rem);
   float: left;
   margin-right: 1rem;
   position: relative;
@@ -86,12 +87,12 @@ html, body {
   left: 0;
   position: absolute;
   pointer-events: none;
-  background: url(images/prev.png) no-repeat center center;
+  background: url(images/prev.png) no-repeat center center / 1.1rem;
 }
 
 [role=navigation] button.recommend span {
   left: calc(100% - 3rem);
-  background: url(images/next.png) no-repeat center center;
+  background-image: url(images/next.png);
 }
 
 [role=navigation] #wifi-join-button {
@@ -130,22 +131,26 @@ html, body {
   border-top: solid 0.1rem #b7b7b7;
   border-bottom: solid 0.1rem #fff;
   position: absolute;
-  top: 6.5rem;
+  top: 5.5rem;
   left: 1.5rem;
   right: 1.5rem;
   z-index: 100;
 }
 
- .step-state:before {
+.step-state:before {
   content: "";
-  width: calc(100% / 6);
-  height: 0.6rem;
+  height: 0.3rem;
+  width: calc(100% / 8);
   position: absolute;
   top: 50%;
   left: 0;
-  margin-top: -0.3rem;
-  background: #00a5c6;
+  margin-top: -0.2rem;
+  background: #858585;
   transition: all 0.35s cubic-bezier(0.000, 1.000, 0.535, 1.110);
+}
+
+.less-steps.step-state:before {
+  width: calc(100% / 6) !important;
 }
 
 /* STATES */
@@ -173,6 +178,14 @@ html, body {
   transform: translateX(500%);
 }
 
+.step-7.step-state:before {
+  transform: translateX(600%);
+}
+
+.step-8.step-state:before {
+  transform: translateX(700%);
+}
+
 /*
   Header conditional button
 */
@@ -190,7 +203,8 @@ html, body {
   z-index: 3000;
   transition: all 1s ease;
   background-image: url(/shared/resources/branding/powered.png);
-  background-size: 100% auto;
+  background-size: cover;
+  background-position: center top;
 }
 
 #splash-screen.show {
@@ -199,45 +213,48 @@ html, body {
 /*
   Pin code screen
 */
+#unlock-sim-screen {
+  z-index: 2000;
+}
 
-#pincode-screen .pin_container {
+#unlock-sim-screen .unlock_container {
   height: calc(100% - 10rem);
 }
 
-#pincode-screen section header {
+#unlock-sim-screen section label {
   padding: 1.5rem 3rem 0.5rem 3rem;
   color: black;
   font-size: 1.5rem;
+  width: auto;
+  height: 2rem;
 }
 
-#pincode-screen .input-wrapper {
+#unlock-sim-screen .input-wrapper {
   padding: 0 1.5rem;
   position: relative;
 }
 
-#pincode-screen #pin-error {
+#unlock-sim-screen .info {
+  font-size: 1.5rem;
+  padding: 1rem 1.5rem;
+}
+
+#unlock-sim-screen .error {
   padding: 1rem 2rem;
   font-size: 1.5rem;
   color: red;
 }
 
-#pincode-screen #pin-input.onerror {
-  border-color: red;
+#unlock-sim-screen .onerror {
+  border: 0.1rem solid red;
 }
 
-#pincode-screen .input-wrapper input {
+#unlock-sim-screen .input-wrapper input {
   font-size: 2rem;
   padding-left: 1.5rem;
-  pointer-events: none;
 }
 
-#pincode-screen #fake-sim-pin {
-  margin-top: -4rem;
-  opacity: 0;
-  pointer-events: auto;
-}
-
-#pincode-screen input[type="number"] {
+#unlock-sim-screen input[type="password"] {
     -moz-box-sizing: border-box;
     display: block;
     overflow: hidden;
@@ -245,24 +262,128 @@ html, body {
     height: 4rem;
     resize: none;
     padding: 0 0.8rem;
+    pointer-events: auto;
 }
 
 /*
   Languages Styles
 */
 
-#languages [data-type="list"] {
-  background: url(images/bg_bubbles.png) 0 -4.5rem no-repeat;
+#languages {
+  background: url(images/bg_bubbles.png) fixed no-repeat;
   background-size: 100% auto;
-  padding-top: 14rem;
+  overflow: hidden;
+}
+
+#languages [data-type="list"] {
+  position: relative;
+  top: 15.5rem;
+  height: calc(100% - 15.5rem);
+  overflow-y: scroll;
+  overflow-x: hidden;
+  padding-top: 0;
 }
 
 /*
-  Wifi
-*/
+ * Wifi
+ */
+
 #wifi [data-type="list"] li > p {
   pointer-events: none;
 }
+
+#wifi li {
+  padding: 0 1.5rem;
+}
+#wifi li.connected p {
+  color: #00AACC;
+}
+
+#wifi li:after {
+  content: "";
+  transition: opacity 0.2s ease;
+  background: #b1f1ff;
+  opacity: 0;
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+}
+
+#wifi li:active:after {
+  opacity: 0.6;
+}
+
+/*
+  No result container
+*/
+#networks {
+  top: 0;
+  bottom: 0;
+}
+
+#networks-list:first-child {
+  padding-top: 0;
+}
+
+#wifi #no-result-container {
+  position: absolute;
+  background: url('images/wifi_icon.png') no-repeat fixed center / 23.6rem;
+  height: 100%;
+  width: 100%;
+}
+
+#wifi #no-result-message {
+  text-align: left;
+  line-height: 3rem;
+  position: relative;
+  top: 50%;
+  border-top: .1rem solid rgba(96,96,96,.5);
+  padding: 0;
+  width: 27rem;
+  margin: -3rem auto;
+  color: #606060;
+  font-weight: 300;
+  font-size: 2.26rem;
+}
+
+/*
+ * States of Wifi signal
+ */
+aside.wifi-icon {
+  background-repeat: no-repeat;
+  background-position: 0 center;
+  background-size: 16rem;
+  width: 3.2rem;
+}
+aside.wifi-signal       { background-image: url(images/wifi_disconnected_sprite.png);}
+aside.connected         { background-image: url(images/wifi_connected_sprite.png);}
+aside.secured           { background-image: url(images/wifi_disconnected_locked_sprite.png);}
+aside.secured.connected { background-image: url(images/wifi_connected_locked_sprite.png);}
+aside.level-0 { background-position:     0rem center;}
+aside.level-1 { background-position:  -3.2rem center;}
+aside.level-2 { background-position:  -6.4rem center;}
+aside.level-3 { background-position:  -9.6rem center;}
+aside.level-4 { background-position: -12.8rem center;}
+
+aside.secured.connecting { background-image: url(images/wifi_connected_locked_sprite.png);}
+aside.connecting {
+  background-image: url(images/wifi_connected_sprite.png);
+  animation-duration: 1s;
+  animation-iteration-count: infinite;
+  animation-timing-function: step-start;
+  animation-name: wifi-signal;
+}
+@keyframes wifi-signal {
+ 0%     { background-position:     0rem center; }
+ 25%    { background-position:  -3.2rem center; }
+ 50%    { background-position:  -6.4rem center; }
+ 75%    { background-position:  -9.6rem center; }
+ 100%   { background-position: -12.8rem center; }
+}
+
 
 /*
   Wifi configuration
@@ -276,14 +397,14 @@ html, body {
   display: block;
   padding: 1.5rem 1.5rem 0.5rem 1.5rem ;
   font-size: 1.5rem;
-  text-transform: capitalize;
 }
 
 #configure_network_params form input {
   padding-left: 1.5rem;
 }
 
-.hidden {
+/* The hide class is needed by the custom_dialog.js library */
+.hidden, .hide {
   display: none !important;
 }
 
@@ -312,7 +433,7 @@ html, body {
   opacity: 0;
   z-index: 3010;
   transition: all 1s ease;
-  background: #3b4547;
+  background: url(images/bg_grey-noise.png);
 }
 
 #finish-screen.show, #tutorialFinish.show {
@@ -322,7 +443,7 @@ html, body {
 #finish-screen h1, #tutorialFinish h1 {
   margin: 0;
   color: white;
-  font-size: 4.1rem;
+  font-size: 3rem;
   padding: 4rem 0 0 0;
   font-weight: 200;
   line-height: 4rem;
@@ -331,7 +452,7 @@ html, body {
 #finish-screen h2, #tutorialFinish h2 {
   margin: 0;
   color: white;
-  font-size: 1.8rem;
+  font-size: 1.9rem;
   padding: .5rem 0 2rem 0;
   font-weight: 200;
   line-height: 2rem;
@@ -356,6 +477,7 @@ html, body {
   height: calc(100% - 6rem);
   padding: 0 3rem;
   width: calc(100% - 6rem);
+  background-size: 17.6rem;
 }
 
 #finish-screen [role=navigation],#tutorialFinish [role=navigation] {
@@ -364,6 +486,10 @@ html, body {
 
 #finish-screen [role=navigation] button,#tutorialFinish [role=navigation] button {
   text-align: center;
+}
+
+#step1Img, #step2Img, #step3Img, #step4Img, #step5Img {
+  width: 28.9rem;
 }
 
 /*
@@ -378,6 +504,7 @@ html, body {
 #time_zone_overlay {
   background-position: bottom;
   background-repeat: no-repeat;
+  background-size: 100%;
   position: relative;
   position: absolute;
   z-index: 10;
@@ -432,6 +559,7 @@ html, body {
   background-image: url('images/timezone/map.png') ;
   background-position: bottom;
   background-repeat: no-repeat;
+  background-size: 100%;
   position: relative;
   height: 21.5rem;
   width: 100%;
@@ -497,53 +625,89 @@ html, body {
 #import_contacts li {
   padding: 0 3.5rem;
 }
-#wifi li {
-  padding: 0 1.5rem;
+
+#import_contacts li.importOption {
+  padding: 0 !important;
+  height: auto !important;
+  border-bottom: none;
 }
 
-#import_contacts li:after,
-#wifi li:after {
-  content: "";
-  transition: opacity 0.2s ease;
-  background: #b1f1ff;
-  opacity: 0;
-  position: absolute;
-  left: 0;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 0;
+#import_contacts #fb_import, #import_contacts #fb_after_import2 {
+  margin-top: 1rem;
 }
 
-#import_contacts li:active:after,
-#wifi li:active:after {
-  opacity: 0.6;
+/* Needed due to the .icon class which is overriding this property */
+#import_contacts button:active {
+  background-color: #008aaa !important;
 }
 
-#import_contacts li.disabled {
-  pointer-events: none;
+#no-sim, #no-sd, #no-network, #fb_after_import2 p {
+  color: #5B5B5B;
+  font-size: 1.5rem;
+  line-height: 2rem;
+  margin: -0.5rem 0 1.5rem 0;
+  padding: 0;
+  white-space: normal;
 }
 
-#import_contacts li.disabled p{
-    pointer-events: none;
-}
-
-#import_contacts li.disabled:after {
-  content: "";
-  background-color: #e6e6e6;
-  opacity: 0.7;
-}
 
 #import_contacts ul:first-child li:last-child {
   margin-bottom: 0;
 }
 
-#sim-import-button {
-  background: url('images/import_sim.png') center left no-repeat;
+/* Extending icon types*/
+#import_contacts [data-type="list"] li button.icon-fb:before {
+  background-image: url('/contacts/style/images/f_logo.png');
 }
 
-#fb_import {
-  background: url('images/import_fb.png') center left no-repeat;
+#import_contacts [data-type="list"] li button.icon-sim:before {
+  background-image: url('/contacts/style/images/import_SIM.png');
+}
+#import_contacts [data-type="list"] li button.icon-sd:before {
+  background-image: url('/contacts/style/images/import_sd.png');
+}
+
+#import_contacts [data-type="list"] li button.icon-wlive:before {
+  background-image: url('/contacts/style/images/outlook_icon.png');
+}
+
+#import_contacts [data-type="list"] li button.icon-gmail:before {
+  background-image: url('/contacts/style/images/gmail_icon.png');
+}
+
+#import_contacts li button.icon {
+  padding-left: 3rem;
+  text-indent: 1rem;
+}
+
+#import_contacts li button.icon:before {
+  right: auto;
+  left: 0.5rem;
+  background-size: 3rem;
+}
+
+#import_contacts li button[disabled="disabled"].icon:before {
+  opacity: 0.2;
+}
+
+#import_contacts article:first-child ul {
+  margin-top: 1.6rem;
+}
+
+
+#fb_after_import1 {
+  background: url('images/import_fb.png') no-repeat center left /3rem;
+}
+
+#statusMsg.ftu {
+  bottom: 6.5rem;
+  z-index: 0;
+  opacity: 0;
+}
+
+#statusMsg.ftu.bannerStart {
+  z-index: 2;
+  opacity: 1;
 }
 
 /*
@@ -561,8 +725,13 @@ html, body {
   font-size: 1.35rem;
   line-height: 1.8rem;
 }
+
 #welcome_browser #browser_logo_horizontal {
   margin: 1rem 0;
+}
+
+#welcome_browser #browser_logo_horizontal img{
+  max-width: 100%;
 }
 
 #welcome_browser label {
@@ -625,6 +794,7 @@ html, body {
   padding: 1.5rem 3rem 0 3rem;
   width: calc(100% - 6rem);
   height: calc(100% - 3.5rem);
+  margin-top: 2rem;
 }
 
 #browser_privacy img {
@@ -638,9 +808,7 @@ html, body {
   font-size: 1.35rem;
   line-height: 1.8rem;
 }
-#browser_privacy p:first-child {
-  margin-top: 2rem;
-}
+
 
 #browser_privacy p a {
   margin-left: 0.3rem;
@@ -741,11 +909,17 @@ i.hack-first-child {
   background-image: -moz-image-rect(url(/shared/resources/branding/privacy_sprite.png), 0, 96, 32, 64);
 }
 
-/* no connection error dialog */
+#newsletter-form.hidden,
+#newsletter-success-screen,
+#invalid-email-error-dialog,
+#offline-newsletter-error-dialog,
 #offline-error-dialog {
   display: none;
 }
 
+#newsletter-success-screen.visible,
+#invalid-email-error-dialog.visible,
+#offline-newsletter-error-dialog.visible,
 #offline-error-dialog.visible {
   display: block;
 }
@@ -767,10 +941,6 @@ i.hack-first-child {
 /* .pack-value-selector should be part of "BB lists" */
 [data-type="list"] li {
   transition: none;
-}
-
-[data-type="list"].pack-value-selector li:first-child {
-  border-top: 0.1rem solid rgb(219, 217, 217);
 }
 
 [data-type="list"].pack-value-selector li:after {
@@ -817,7 +987,7 @@ i.hack-first-child {
 }
 
 [data-type="list"].pack-value-selector li label:not([for]) input:checked + span {
-  background: url("images/checked.png") no-repeat right center;
+  background: url("images/checked.png") no-repeat right center / 100%;
 }
 
 [data-type="list"].pack-value-selector li label:not([for]) input + span + p {
@@ -838,34 +1008,13 @@ i.hack-first-child {
   height: 100%;
 }
 
-/*
-  States of Wifi
-*/
-
-.wifi-signal0 {
-  background-image: -moz-image-rect(url(images/wifi_sprite.png), 0, 32, 32, 0) !important;
-}
-
-.wifi-signal1 {
-  background-image: -moz-image-rect(url(images/wifi_sprite.png), 0, 64, 32, 32) !important;
-}
-
-.wifi-signal2 {
-  background-image: -moz-image-rect(url(images/wifi_sprite.png), 0, 96, 32, 64) !important;
-}
-
-.wifi-signal3 {
-  background-image: -moz-image-rect(url(images/wifi_sprite.png), 0, 128, 32, 96) !important;
-}
-
-.wifi-signal4 {
-  background-image: -moz-image-rect(url(images/wifi_sprite.png), 0, 160, 32, 128) !important;
-}
-
 .icon {
-  background-color: transparent !important;
-  background-repeat: no-repeat !important;
-  background-position: center center !important;
+  background-repeat: no-repeat;
+  background-position: center center;
+}
+
+#time-form .icon {
+  background-color: transparent;
 }
 
 /*
@@ -892,13 +1041,37 @@ i.hack-first-child {
   margin: 0 0.5rem 0 0 !important;
 }
 
+/*
+  geolocation
+*/
+
+#geolocation [data-type="list"] li {
+  padding: 0 1.5rem;
+}
+
+#geolocation label:not([for]) {
+  width: 6rem;
+}
+
+#geolocation .content {
+  padding: 0 3rem 1rem 3rem;
+}
+
+#geolocation .content p {
+  font-size: 1.4rem;
+}
+
+[data-type="list"] aside {
+  margin: 0 0.5rem 0 0 !important;
+}
+
 
 /*
   Tutorial
 */
 
 #tutorial-screen [role=main] > [role=region] {
-  background-color: #474747;
+  background: url(images/bg_grey-noise.png);
   color: white;
 }
 
@@ -926,8 +1099,6 @@ i.hack-first-child {
 
 #tutorial-screen .step-state:before {
   width: calc(100% / 5);
-  height: 0.3rem;
-  margin-top: -0.2rem;
   background: #FFFFFF;
 }
 

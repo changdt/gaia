@@ -1,17 +1,8 @@
 requireCommon('test/synthetic_gestures.js');
+requireApp('calendar/shared/js/gesture_detector.js');
+requireLib('timespan.js');
 
-requireApp('calendar/test/unit/helper.js', function() {
-  requireApp('calendar/shared/js/gesture_detector.js');
-  requireLib('utils/ordered_map.js');
-  requireLib('timespan.js');
-  requireLib('templates/day.js');
-  requireLib('views/time_parent.js');
-  requireLib('views/day_based.js');
-  requireLib('views/day_child.js');
-  requireLib('views/day.js');
-});
-
-suite('views/day', function() {
+suiteGroup('Views.Day', function() {
   var subject,
       app,
       controller,
@@ -61,7 +52,7 @@ suite('views/day', function() {
       calledTime = null;
       subject.changeDate = function() {
         calledTime = arguments;
-      }
+      };
 
       // events are only listened to when
       // activated...
@@ -124,7 +115,7 @@ suite('views/day', function() {
 
     subject.changeDate = function() {
       calledWith = arguments;
-    }
+    };
 
     subject.render();
 
@@ -140,7 +131,7 @@ suite('views/day', function() {
 
       subject.changeDate = function() {
         calledWith = arguments;
-      }
+      };
 
       // start in active state
       subject.onactive();

@@ -21,24 +21,20 @@ var AppStorage = (function AppStorage() {
     attachListeners();
   }
 
+  function getSpaceInfo() {
+    DeviceStorageHelper.getStat('apps', _callback);
+  }
+
   function attachListeners() {
-    _appStorage.addEventListener('change', handleEvent);
+    _appStorage.addEventListener('change', getSpaceInfo);
+    window.addEventListener('localized', getSpaceInfo);
   }
 
   function detachListeners() {
-    _appStorage.removeEventListener('change', handleEvent);
+    _appStorage.removeEventListener('change', getSpaceInfo);
+    window.removeEventListener('localized', getSpaceInfo);
   }
 
-  function handleEvent(evt) {
-    debug('event handler: ' + evt.type + ' - ' + evt.reason);
-    if (_callback)
-      _callback();
-  }
-
-  function getSpaceInfo(callback) {
-    var callbackFunc = callback ? callback : _callback;
-    DeviceStorageHelper.getStat('apps', callbackFunc);
-  }
 
   return {
     init: init,
@@ -48,7 +44,7 @@ var AppStorage = (function AppStorage() {
   };
 })();
 
-onLocalized(function SettingsAppStorage() {
+navigator.mozL10n.ready(function SettingsAppStorage() {
   function updateInfo(usedSize, freeSize) {
     var _ = navigator.mozL10n.get;
 
@@ -65,33 +61,15 @@ onLocalized(function SettingsAppStorage() {
       spaceBar.value = usedPercentage;
     }
 
-    function formatSize(element, size, l10nId) {
-      if (!element)
-        return;
-
-      // KB - 3 KB (nearest ones), MB, GB - 1.2 MB (nearest tenth)
-      var fixedDigits = (size < 1024 * 1024) ? 0 : 1;
-      var sizeInfo = FileSizeFormatter.getReadableFileSize(size, fixedDigits);
-
-      element.textContent = _(l10nId || 'storageSize', {
-        size: sizeInfo.size,
-        unit: _('byteUnit-' + sizeInfo.unit)
-      });
-    }
-
-    // Update the subtitle of device storage
-    var element = document.getElementById('device-storage-desc');
-    formatSize(element, freeSize, 'availableSize');
-
     // Update the storage details
-    element = document.getElementById('apps-total-space');
-    formatSize(element, totalSize);
+    var element = document.getElementById('apps-total-space');
+    DeviceStorageHelper.showFormatedSize(element, 'storageSize', totalSize);
 
     element = document.getElementById('apps-used-space');
-    formatSize(element, usedSize);
+    DeviceStorageHelper.showFormatedSize(element, 'storageSize', usedSize);
 
     element = document.getElementById('apps-free-space');
-    formatSize(element, freeSize);
+    DeviceStorageHelper.showFormatedSize(element, 'storageSize', freeSize);
   }
 
   AppStorage.init(updateInfo);

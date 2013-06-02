@@ -1,37 +1,58 @@
 
 'use strict';
 
-const DockManager = (function() {
+var DockManager = (function() {
 
   var container, dock;
 
   var MAX_NUM_ICONS = 7;
-  var maxNumAppInViewPort, numAppsBeforeDrag, maxOffsetLeft;
+  var maxNumAppInViewPort = 4, maxOffsetLeft;
 
   var windowWidth = window.innerWidth;
   var duration = 300;
 
   var initialOffsetLeft, initialOffsetRight, numApps, cellWidth;
-  var isPanning = false, startX, currentX, deltaX;
-  var thresholdForTapping = 10;
+  var isPanning = false, startEvent, currentX, deltaX, tapThreshold;
+
+  var isTouch = 'ontouchstart' in window;
+  var touchstart = isTouch ? 'touchstart' : 'mousedown';
+  var touchmove = isTouch ? 'touchmove' : 'mousemove';
+  var touchend = isTouch ? 'touchend' : 'mouseup';
+
+  var getX = (function getXWrapper() {
+    return isTouch ? function(e) { return e.touches[0].pageX } :
+                     function(e) { return e.pageX };
+  })();
+
+  function addActive(target) {
+    if ('isIcon' in target.dataset) {
+      target.classList.add('active');
+      removeActive = function _removeActive() {
+        target.classList.remove('active');
+      };
+    } else {
+      removeActive = function() {};
+    }
+  }
+
+  var removeActive = function() {};
 
   function handleEvent(evt) {
     switch (evt.type) {
-      case 'mousedown':
+      case touchstart:
         evt.stopPropagation();
         initialOffsetLeft = dock.getLeft();
         initialOffsetRight = dock.getRight();
         numApps = dock.getNumIcons();
-        startX = evt.clientX;
+        startEvent = isTouch ? evt.touches[0] : evt;
         attachEvents();
+        addActive(evt.target);
         break;
 
-      case 'mousemove':
-        evt.stopPropagation();
-
-        deltaX = evt.clientX - startX;
+      case touchmove:
+        deltaX = getX(evt) - startEvent.pageX;
         if (!isPanning) {
-          if (Math.abs(deltaX) < thresholdForTapping) {
+          if (Math.abs(deltaX) < tapThreshold) {
             return;
           } else {
             isPanning = true;
@@ -67,8 +88,7 @@ const DockManager = (function() {
         dock.moveBy(initialOffsetLeft + deltaX);
         break;
 
-      case 'mouseup':
-        evt.stopPropagation();
+      case touchend:
         releaseEvents();
 
         if (!isPanning) {
@@ -78,14 +98,27 @@ const DockManager = (function() {
           onTouchEnd(deltaX);
         }
 
+        removeActive();
+
         break;
 
       case 'contextmenu':
-        if (GridManager.pageHelper.getCurrentPageNumber() > 1) {
+        if (isPanning) {
+          evt.stopImmediatePropagation();
+          return;
+        }
+
+        if (GridManager.pageHelper.getCurrentPageNumber() >
+            GridManager.landingPage) {
+
           Homescreen.setMode('edit');
+          removeActive();
 
           if ('isIcon' in evt.target.dataset) {
-            DragDropManager.start(evt, {x: evt.clientX, y: evt.clientY});
+            DragDropManager.start(evt, {
+              'x': startEvent.pageX,
+              'y': startEvent.pageY
+            });
           }
         }
         break;
@@ -93,6 +126,8 @@ const DockManager = (function() {
   }
 
   function goNextSet() {
+    calculateDimentions(dock.getNumIcons());
+
     if (dock.getLeft() <= maxOffsetLeft) {
       return;
     }
@@ -101,6 +136,8 @@ const DockManager = (function() {
   }
 
   function goPreviousSet() {
+    calculateDimentions(dock.getNumIcons());
+
     if (dock.getLeft() >= 0) {
       return;
     }
@@ -125,29 +162,41 @@ const DockManager = (function() {
 
   function releaseEvents() {
     container.removeEventListener('contextmenu', handleEvent);
-    window.removeEventListener('mousemove', handleEvent);
-    window.removeEventListener('mouseup', handleEvent);
+    window.removeEventListener(touchmove, handleEvent);
+    window.removeEventListener(touchend, handleEvent);
   }
 
   function attachEvents() {
     container.addEventListener('contextmenu', handleEvent);
-    window.addEventListener('mousemove', handleEvent);
-    window.addEventListener('mouseup', handleEvent);
+    window.addEventListener(touchmove, handleEvent);
+    window.addEventListener(touchend, handleEvent);
   }
 
-  function placeAfterRemovingApp(numApps, centering) {
-    document.body.dataset.transitioning = 'true';
-
-    if (centering || numApps <= maxNumAppInViewPort) {
-      dock.moveByWithDuration(maxOffsetLeft / 2, .5);
-    } else {
-      dock.moveByWithDuration(dock.getLeft() + cellWidth, .5);
+  function rePosition(numApps) {
+    if (numApps > maxNumAppInViewPort && dock.getLeft() < 0 &&
+          dock.getRight() > windowWidth) {
+      // The dock takes up the screen width.
+      return;
     }
 
+    // We are going to place the dock in the middle of the screen
+    document.body.dataset.transitioning = 'true';
+    dock.moveByWithDuration(maxOffsetLeft / 2, .5);
     container.addEventListener('transitionend', function transEnd(e) {
       container.removeEventListener('transitionend', transEnd);
       delete document.body.dataset.transitioning;
     });
+  }
+
+  function calculateDimentions(numIcons) {
+    if (numIcons <= maxNumAppInViewPort) {
+      container.classList.remove('scrollable');
+    } else {
+      container.classList.add('scrollable');
+    }
+
+    cellWidth = numIcons ? dock.getFirstIcon().getWidth() : 0;
+    maxOffsetLeft = windowWidth - numIcons * cellWidth;
   }
 
   return {
@@ -160,37 +209,34 @@ const DockManager = (function() {
      * @param {Dock} page
      *               The dock page object.
      */
-    init: function dm_init(containerEl, page) {
+    init: function dm_init(containerEl, page, pTapThreshold) {
+      tapThreshold = pTapThreshold;
       container = containerEl;
-      container.addEventListener('mousedown', handleEvent);
+      container.addEventListener(touchstart, handleEvent);
       dock = this.page = page;
 
-      var numIcons= dock.getNumIcons();
-      cellWidth = dock.getWidth() / numIcons;
-      maxNumAppInViewPort = Math.floor(windowWidth / cellWidth);
-      maxOffsetLeft = windowWidth - numIcons * cellWidth;
+      var numIcons = dock.getNumIcons();
+      if (numIcons > maxNumAppInViewPort) {
+        container.classList.add('scrollable');
+      }
+
+      calculateDimentions(numIcons);
+
       if (numIcons <= maxNumAppInViewPort) {
         dock.moveBy(maxOffsetLeft / 2);
       }
     },
 
     onDragStop: function dm_onDragStop() {
+      container.addEventListener(touchstart, handleEvent);
       var numApps = dock.getNumIcons();
-      maxOffsetLeft = windowWidth - numApps * cellWidth;
-      if (numApps === numAppsBeforeDrag ||
-          numApps > maxNumAppInViewPort &&
-          (numApps < numAppsBeforeDrag && dock.getRight() >= windowWidth ||
-           numApps > numAppsBeforeDrag && dock.getLeft() < 0)
-         ) {
-        return;
-      }
-
-      placeAfterRemovingApp(numApps, numApps > numAppsBeforeDrag);
+      calculateDimentions(numApps);
+      rePosition(numApps);
     },
 
     onDragStart: function dm_onDragStart() {
       releaseEvents();
-      numAppsBeforeDrag = dock.getNumIcons();
+      container.removeEventListener(touchstart, handleEvent);
     },
 
     /*
@@ -207,7 +253,8 @@ const DockManager = (function() {
       if (numApps > maxNumAppInViewPort && dock.getRight() >= windowWidth) {
         return;
       }
-      placeAfterRemovingApp(numApps);
+      calculateDimentions(numApps);
+      rePosition(numApps);
     },
 
     isFull: function dm_isFull() {
@@ -216,6 +263,16 @@ const DockManager = (function() {
 
     goNextSet: goNextSet,
 
-    goPreviousSet: goPreviousSet
+    goPreviousSet: goPreviousSet,
+
+    calculateDimentions: calculateDimentions,
+
+    get cellWidth() {
+      return cellWidth;
+    },
+
+    get maxOffsetLeft() {
+      return maxOffsetLeft;
+    }
   };
 }());

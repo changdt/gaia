@@ -1,21 +1,20 @@
 Evme.SmartFolder = function Evme_SartFolder(_options) {
     var self = this, NAME = "SmartFolder",
-        name = '', image = '', scroll = null, shouldFadeImage = false, bgImage = null,
+        experienceId = '', query = '', image = '', scroll = null, shouldFadeImage = false, bgImage = null,
         el = null, elScreen = null, elTitle = null, elClose = null,
-        elAppsContainer = null, elApps = null,
+        elAppsContainer = null, elApps = null, elLoading,
         elImage = null, elImageOverlay = null, elImageFullscreen = null,
-        reportedScrollMove = false, onScrollEnd = null,
+        reportedScrollMove = false, optionsOnScrollEnd = null,
         fadeBy = 1,
         
+        SCROLL_BOTTOM_THRESHOLD = 5,
+        CLASS_WHEN_LOADING = 'show-loading-apps',
         CLASS_WHEN_VISIBLE = 'visible',
         CLASS_WHEN_IMAGE_FULLSCREEN = 'full-image',
         CLASS_WHEN_ANIMATING = 'animate',
-        CLASS_WHEN_MAX_HEIGHT = 'maxheight',
-        SCROLL_TO_BOTTOM = "CALCULATED",
         SCROLL_TO_SHOW_IMAGE = 80,
         TRANSITION_DURATION = 400,
         LOAD_MORE_SCROLL_THRESHOLD = -30,
-        MAX_HEIGHT = 520,
         MAX_SCROLL_FADE = 200,
         FULLSCREEN_THRESHOLD = 0.8;
         
@@ -25,16 +24,24 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
         createElement();
         
         options.bgImage && self.setBgImage(options.bgImage);
-        options.name && self.setName(options.name);
+        options.query && self.setQuery(options.query);
+        options.experienceId && self.setExperience(options.experienceId);
         options.image && self.setImage(options.image);
         options.elParent && self.appendTo(options.elParent);
-        (typeof options.maxHeight === "number") && (MAX_HEIGHT = options.maxHeight);
         
-        onScrollEnd = options.onScrollEnd;
+        optionsOnScrollEnd = options.onScrollEnd;
         
         self.MoreIndicator.init({
             "elParent": elApps
         });
+
+
+      
+        elLoading = Evme.$create('div',
+                    { 'class': 'loading-apps' },
+                    '<progress class="small skin-dark"></progress>');
+          
+        elAppsContainer.appendChild(elLoading);
         
         Evme.EventHandler.trigger(NAME, "init");
         
@@ -100,14 +107,11 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
                 "isMore": offset > 0,
                 "iconsFormat": iconsFormat,
                 "elList": elApps,
-                "onDone": function onAppsPrintComplete(group, appsList) {
+                "onDone": function onAppsPrintComplete(appsList) {
                     if (areInstalledApps && apps && apps.length) {
                         self.addInstalledSeparator();
                     }
                     
-                    scroll.refresh();
-                    
-                    SCROLL_TO_BOTTOM = elAppsContainer.offsetHeight - elApps.offsetHeight;
                     if (offset === 0) {
                         scroll.scrollTo(0, 0);
                     }
@@ -116,33 +120,58 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
                 }
             });
         
+        self.hideLoading();
+        
         Evme.EventHandler.trigger(NAME, "load");
         
         return iconsResult;
+    };
+    
+    this.showLoading = function showLoading() {
+      elLoading.style.transform = 'translateY(' + self.getInstalledHeight()/2 + 'px)';
+      elAppsContainer.classList.add(CLASS_WHEN_LOADING);
+    };
+    
+    this.hideLoading = function hideLoading() {
+      elAppsContainer.classList.remove(CLASS_WHEN_LOADING);
     };
     
     this.appendTo = function appendTo(elParent) {
         elParent.appendChild(el);
         elParent.appendChild(elScreen);
         
-        if (el.offsetHeight > MAX_HEIGHT) {
-            el.classList.add(CLASS_WHEN_MAX_HEIGHT);
-            el.style.cssText += 'height: ' + MAX_HEIGHT + 'px; margin-top: ' + (-MAX_HEIGHT/2) + 'px;';
+        return self;
+    };
+    
+    this.setExperience = function setExperience(newExperienceId) {
+        if (!newExperienceId || newExperienceId === experienceId) {
+            return self;
+        }
+        
+        experienceId = newExperienceId;
+        
+        var l10nkey = 'id-' + Evme.Utils.shortcutIdToKey(experienceId),
+            queryById = Evme.Utils.l10n('shortcut', l10nkey);
+            
+        elTitle.innerHTML = '<em></em>' +
+                            '<b ' + Evme.Utils.l10nAttr(NAME, 'title-prefix') + '></b> ' +
+                            '<span ' + Evme.Utils.l10nAttr('shortcut', l10nkey) + '></span>';
+        
+        if (queryById) {
+            self.setQuery(queryById);
+        } else if (query) {
+            Evme.$('span', elTitle)[0].textContent = query;
         }
         
         return self;
     };
     
-    this.setName = function setName(newName) {
-        if (!newName || newName === name) {
+    this.setQuery = function setQuery(newQuery) {
+        if (!newQuery || newQuery === query) {
             return self;
         }
         
-        name = newName;
-        
-        elTitle.innerHTML = '<em></em>' +
-                            '<b ' + Evme.Utils.l10nAttr(NAME, 'title-prefix') + '></b> ' +
-                            '<span>' + name + '</span>';
+        query = newQuery;
         
         return self;
     };
@@ -223,10 +252,18 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
         return isTrue;
     };
     
-    this.addInstalledSeparator = function() {
+    this.addInstalledSeparator = function addInstalledSeparator() {
         elApps.appendChild(Evme.$create('li', {'class': "installed-separator"}));
     };
-    
+
+    this.getInstalledHeight = function getInstalledHeight() {
+      var elSeparator = (Evme.$('.installed-separator', elApps) || [])[0],
+          top = elSeparator? elSeparator.getBoundingClientRect().top : 0,
+          parentTop = elSeparator? elSeparator.parentNode.getBoundingClientRect().top : 0;
+      
+      return (top - parentTop);
+    };
+
     this.MoreIndicator = new function MoreIndicator() {
         var self = this,
             el = null, elParent = null,
@@ -249,7 +286,7 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
             el = Evme.$create('li',
                     {'class': "loadmore"},
                     '<progress class="small skin-dark"></progress>' +
-                    '<b ' + Evme.Utils.l10nAttr(NAME, 'loading-more') + '></b>');
+                    '<b class="label" ' + Evme.Utils.l10nAttr(NAME, 'loading-more') + '></b>');
                     
             elParent.appendChild(el);
             
@@ -263,7 +300,8 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
     };
     
     this.getElement = function getElement() { return el; };
-    this.getName = function getName() { return name; };
+    this.getExperience = function getExperience() { return experienceId; };
+    this.getQuery = function getQuery() { return query; };
     this.getImage = function getImage() { return image; };
     
     function createElement() {
@@ -288,14 +326,15 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
         
         scroll = new Scroll(elApps.parentNode, {
             "hScroll": false,
-            "checkDOMChanges": false,
-            "onScrollStart": onScrollStart,
+            "onTouchStart": onTouchStart,
+            "onTouchMove": onTouchMove,
+            "onTouchEnd": onTouchEnd,
             "onScrollMove": onScrollMove,
-            "onTouchEnd": onTouchEnd
+            "onScrollEnd": onScrollEndFunc
         });
     }
     
-    function onScrollStart(data) {
+    function onTouchStart(data) {
         var y = scroll.y;
         
         elAppsContainer.dataset.scrollOffset = y;
@@ -304,36 +343,49 @@ Evme.SmartFolder = function Evme_SartFolder(_options) {
         reportedScrollMove = false;
     }
     
-    function onScrollMove(data) {
-        var y = scroll.y;
-        
+    function onTouchMove(data) {
+        var y = scroll.y,
+            newFadeBy;
+
         if (shouldFadeImage) {
-            var _fadeBy = 1 - Math.min(Math.max(scroll.distY, 0), MAX_SCROLL_FADE)/MAX_SCROLL_FADE;
-            if (_fadeBy > fadeBy) {
-                _fadeBy = 1;
+            // fade amount (opacity) is calculated as a percent of the amount the user scrolled
+            // out of a maximum we want the swipe-to-fade to be.
+            // so if we say MAX_SCROLL_FADE=100, and the user scrolled for 100px,
+            // we should fade everything to 0.5.
+            newFadeBy = 1 - Math.min(Math.max(scroll.distY, 0), MAX_SCROLL_FADE)/MAX_SCROLL_FADE;
+            
+            // if the user started swiping in the other direction- immediately show the UI fully opaque
+            if (newFadeBy > fadeBy) {
+                newFadeBy = 1;
                 shouldFadeImage = false;
             }
             
-            fadeBy = _fadeBy;
+            fadeBy = newFadeBy;
             self.fadeImage(fadeBy);
         }
+    }
+    
+    function onScrollMove(data) {
+        var y = scroll.y;
         
-        if (!reportedScrollMove && SCROLL_TO_BOTTOM + y < LOAD_MORE_SCROLL_THRESHOLD) {
+        if (!reportedScrollMove && scroll.maxY - y <= SCROLL_BOTTOM_THRESHOLD) {
             reportedScrollMove = true;
-            onScrollEnd && onScrollEnd(self);
+            optionsOnScrollEnd && optionsOnScrollEnd(self);
         }
     }
     
     function onTouchEnd() {
-        var y = scroll.y;
-        
-        elAppsContainer.dataset.scrollOffset = y;
+        elAppsContainer.dataset.scrollOffset = scroll.y;
         
         if (shouldFadeImage && scroll.distY >= FULLSCREEN_THRESHOLD*MAX_SCROLL_FADE) {
             self.showFullscreen();
         } else {
             self.hideFullscreen();
         }
+    }
+
+    function onScrollEndFunc() {
+        elAppsContainer.dataset.scrollOffset = scroll.y;
     }
     
     self.init(_options);

@@ -3,6 +3,7 @@
 var CallScreen = {
   _ticker: null,
   _screenLock: null,
+  _typedNumber: '',
 
   body: document.body,
   screen: document.getElementById('call-screen'),
@@ -51,6 +52,35 @@ var CallScreen = {
 
     this.calls.addEventListener('click',
                                 OnCallHandler.toggleCalls);
+
+    // If the phone is locked, show as an locked-style at very first.
+    if ((window.location.hash === '#locked') && !this.screen.dataset.layout) {
+      CallScreen.render('incoming-locked');
+    }
+    if (navigator.mozSettings) {
+      var req = navigator.mozSettings.createLock().get('wallpaper.image');
+      req.onsuccess = function cs_wi_onsuccess() {
+        CallScreen.setCallerContactImage(
+          req.result['wallpaper.image'], false, true);
+      };
+    }
+
+    // Handle resize events
+    window.addEventListener('resize', this.resizeHandler.bind(this));
+  },
+
+  resizeHandler: function cs_resizeHandler() {
+    // Handle attention screen switches between full screen/status bar mode.
+    // If a user is typing keypad during calling,
+    // we don't show the typed number in status bar mode.
+    if (window.innerHeight <= 40) {
+      if (this.body.classList.contains('showKeypad')) {
+        this._typedNumber = KeypadManager._phoneNumber;
+        KeypadManager.restorePhoneNumber('end', true);
+      }
+    } else if (this.body.classList.contains('showKeypad')) {
+      KeypadManager.updatePhoneNumber(this._typedNumber, 'begin', true);
+    }
   },
 
   setCallerContactImage: function cs_setContactImage(image_url, force, mask) {
@@ -84,6 +114,11 @@ var CallScreen = {
     OnCallHandler.toggleSpeaker();
   },
 
+  turnSpeakerOn: function cs_turnSpeakerOn() {
+    this.speakerButton.classList.add('speak');
+    OnCallHandler.turnSpeakerOn();
+  },
+
   turnSpeakerOff: function cs_turnSpeakerOff() {
     this.speakerButton.classList.remove('speak');
     OnCallHandler.turnSpeakerOff();
@@ -95,9 +130,8 @@ var CallScreen = {
   },
 
   hideKeypad: function cs_hideKeypad() {
-    KeypadManager.restorePhoneNumber();
+    KeypadManager.restorePhoneNumber('end', true);
     KeypadManager.restoreAdditionalContactInfo();
-    KeypadManager.formatPhoneNumber();
     this.body.classList.remove('showKeypad');
   },
 
@@ -142,6 +176,7 @@ var CallScreen = {
 };
 
 var OnCallHandler = (function onCallHandler() {
+  var COMMS_APP_ORIGIN = 'app://communications.gaiamobile.org';
   // Changing this will probably require markup changes
   var CALLS_LIMIT = 2;
 
@@ -149,14 +184,17 @@ var OnCallHandler = (function onCallHandler() {
   var telephony = window.navigator.mozTelephony;
   telephony.oncallschanged = onCallsChanged;
 
+  var settings = window.navigator.mozSettings;
+
   var displayed = false;
   var closing = false;
   var animating = false;
   var ringing = false;
+  var busyNotificationLock = false;
 
   /* === Settings === */
   var activePhoneSound = null;
-  SettingsListener.observe('ring.enabled', true, function(value) {
+  SettingsListener.observe('audio.volume.notification', 7, function(value) {
     activePhoneSound = !!value;
     if (ringing && activePhoneSound) {
       ringtonePlayer.play();
@@ -176,8 +214,8 @@ var OnCallHandler = (function onCallHandler() {
 
   // Setting up the SimplePhoneMatcher
   var conn = window.navigator.mozMobileConnection;
-  if (conn) {
-    SimplePhoneMatcher.mcc = conn.voice.network.mcc.toString();
+  if (conn && conn.voice && conn.voice.network && conn.voice.network.mcc) {
+    SimplePhoneMatcher.mcc = conn.voice.network.mcc;
   }
 
   var ringtonePlayer = new Audio();
@@ -191,30 +229,44 @@ var OnCallHandler = (function onCallHandler() {
   });
 
   var screenLock;
-  var cpuLock;
 
   /* === Setup === */
   function setup() {
-    // Animating the screen in the viewport.
-    toggleScreen();
-
-    cpuLock = navigator.requestWakeLock('cpu');
-
     if (telephony) {
       // Somehow the muted property appears to true after initialization.
       // Set it to false.
       telephony.muted = false;
     }
+
+    // Animating the screen in the viewport.
+    // We wait for the next tick because we may receive an exitCallScreen
+    // as soon as we're loaded.
+    setTimeout(function nextTick() {
+      if (!closing) {
+        toggleScreen();
+      }
+    });
+
+    postToMainWindow('ready');
   }
 
   function postToMainWindow(data) {
-    var origin = document.location.protocol + '//' +
-      document.location.host;
-    window.opener.postMessage(data, origin);
+    window.opener.postMessage(data, COMMS_APP_ORIGIN);
   }
 
   /* === Handled calls === */
+  var highPriorityWakeLock = null;
   function onCallsChanged() {
+    // Acquire or release the high-priority wake lock, as necessary.  This
+    // (mostly) prevents this process from being killed while we're on a call.
+    if (!highPriorityWakeLock && telephony.calls.length > 0) {
+      highPriorityWakeLock = navigator.requestWakeLock('high-priority');
+    }
+    if (highPriorityWakeLock && telephony.calls.length == 0) {
+      highPriorityWakeLock.unlock();
+      highPriorityWakeLock = null;
+    }
+
     // Adding any new calls to handledCalls
     telephony.calls.forEach(function callIterator(call) {
       var alreadyAdded = handledCalls.some(function hcIterator(hc) {
@@ -246,8 +298,11 @@ var OnCallHandler = (function onCallHandler() {
   }
 
   function addCall(call) {
-    // Once we already have 1 call, we only care about incomings
-    if (handledCalls.length && (call.state != 'incoming')) {
+    busyNotificationLock = false;
+    // Once we already have 1 call, we need to care about incoming
+    // calls and insert new dialing calls.
+    if (handledCalls.length &&
+      (call.state != 'incoming') && (call.state != 'dialing')) {
       return;
     }
 
@@ -258,44 +313,47 @@ var OnCallHandler = (function onCallHandler() {
       return;
     }
 
-    var node = CallScreen.calls.children[handledCalls.length];
+    var node = null;
+    // Find an available node for displaying the call
+    var children = CallScreen.calls.children;
+    for (var i = 0; i < children.length; i++) {
+      var n = children[i];
+      if (n.dataset.occupied === 'false') {
+        node = n;
+        break;
+      }
+    }
     var hc = new HandledCall(call, node);
     handledCalls.push(hc);
 
-    // This is the initial incoming call, need to ring !
-    if (call.state === 'incoming' && handledCalls.length === 1) {
-      handleFirstIncoming(call);
+    if (call.state === 'incoming') {
+      call.addEventListener('statechange', function callStateChange() {
+        call.removeEventListener('statechange', callStateChange);
+        // The call wasn't picked up
+        if (call.state == 'disconnected') {
+          var callInfo = {
+            type: 'notification',
+            number: call.number
+          };
+          postToMainWindow(callInfo);
+        }
+      });
+
+      // This is the initial incoming call, need to ring !
+      if (handledCalls.length === 1) {
+        handleFirstIncoming(call);
+      }
     }
 
     if (handledCalls.length > 1) {
       // New incoming call, signaling the user.
-      // Waiting for the screen to be turned on before vibrating.
-      if (document.mozHidden) {
-        window.addEventListener('mozvisibilitychange', function waitOn() {
-          window.removeEventListener('mozvisibilitychange', waitOn);
-          if (activateVibration) {
-            navigator.vibrate([100, 100, 100]);
-          }
-        });
+      if (call.state === 'incoming') {
+        handleCallWaiting(call);
+
+      // User performed another outgoing call. show its status.
       } else {
-        if (activateVibration) {
-          navigator.vibrate([100, 100, 100]);
-        }
+        hc.show();
       }
-
-      LazyL10n.get(function localized(_) {
-        var number = (call.number.length ? call.number : _('unknown'));
-        Contacts.findByNumber(number, function lookupContact(contact) {
-          if (contact && contact.name) {
-            CallScreen.incomingNumber.textContent = contact.name;
-            return;
-          }
-
-          CallScreen.incomingNumber.textContent = number;
-        });
-      });
-
-      CallScreen.showIncoming();
     } else {
       if (window.location.hash === '#locked' &&
           (call.state == 'incoming')) {
@@ -325,7 +383,7 @@ var OnCallHandler = (function onCallHandler() {
         setTimeout(function nextTick() {
           if (remainingCall.call.state == 'incoming') {
             CallScreen.render('incoming');
-          };
+          }
         });
 
         return;
@@ -340,6 +398,9 @@ var OnCallHandler = (function onCallHandler() {
   }
 
   function handleFirstIncoming(call) {
+    unmute();
+    turnSpeakerOff();
+
     var vibrateInterval = 0;
     if (activateVibration != false) {
       vibrateInterval = window.setInterval(function vibrate() {
@@ -372,15 +433,36 @@ var OnCallHandler = (function onCallHandler() {
         screenLock.unlock();
         screenLock = null;
       }
+    });
+  }
 
-      // The call wasn't picked up
-      if (call.state == 'disconnected') {
-        var callInfo = {
-          type: 'notification',
-          number: call.number
-        };
-        postToMainWindow(callInfo);
-      }
+  function handleCallWaiting(call) {
+    LazyL10n.get(function localized(_) {
+      var number = call.number || _('withheld-number');
+      Contacts.findByNumber(number, function lookupContact(contact) {
+        if (contact && contact.name) {
+          CallScreen.incomingNumber.textContent = contact.name;
+          return;
+        }
+
+        CallScreen.incomingNumber.textContent = number;
+      });
+    });
+
+    CallScreen.showIncoming();
+
+    // ANSI call waiting tone for a 10 sec window
+    var sequence = [[440, 440, 100],
+                    [0, 0, 100],
+                    [440, 440, 100]];
+    var toneInterval = window.setInterval(function playTone() {
+      TonePlayer.playSequence(sequence);
+    }, 10000);
+    TonePlayer.playSequence(sequence);
+
+    call.addEventListener('statechange', function callStateChange() {
+      call.removeEventListener('statechange', callStateChange);
+      window.clearInterval(toneInterval);
     });
   }
 
@@ -390,49 +472,36 @@ var OnCallHandler = (function onCallHandler() {
     animating = true;
 
     var callScreen = CallScreen.screen;
-    callScreen.classList.remove('animate');
-    callScreen.classList.toggle('prerender');
+    callScreen.classList.toggle('displayed');
 
-    window.addEventListener('MozAfterPaint', function ch_finishAfterPaint() {
-      window.removeEventListener('MozAfterPaint', ch_finishAfterPaint);
+    callScreen.addEventListener('transitionend', function trWait() {
+      callScreen.removeEventListener('transitionend', trWait);
 
-      window.setTimeout(function cs_transitionNextLoop() {
-        callScreen.classList.add('animate');
-        callScreen.classList.toggle('displayed');
-        callScreen.classList.toggle('prerender');
+      animating = false;
 
-        callScreen.addEventListener('transitionend', function trWait() {
-          callScreen.removeEventListener('transitionend', trWait);
-
-          animating = false;
-
-          // We did animate the call screen off the viewport
-          // now closing the window.
-          if (!displayed) {
-            closeWindow();
-          }
-        });
-      });
+      // We did animate the call screen off the viewport
+      // now closing the window.
+      if (!displayed) {
+        closeWindow();
+      }
     });
   }
 
   function exitCallScreen(animate) {
-    if (closing) {
+    if (closing || busyNotificationLock) {
       return;
     }
 
-    if (cpuLock) {
-      cpuLock.unlock();
-      cpuLock = null;
-    }
-
     closing = true;
+
+    postToMainWindow('closing');
 
     if (Swiper) {
       Swiper.setElasticEnabled(false);
     }
 
-    if (animate && !animating) {
+    // If the screen is not displayed yet we close the window directly
+    if (animate && !animating && displayed) {
       toggleScreen();
     } else {
       closeWindow();
@@ -440,18 +509,20 @@ var OnCallHandler = (function onCallHandler() {
   }
 
   function closeWindow() {
-    postToMainWindow('closing');
     window.close();
   }
 
   /* Handle commands send to the callscreen via postmessage */
   function handleCommand(evt) {
+    if (evt.origin !== COMMS_APP_ORIGIN) {
+      return;
+    }
     var message = evt.data;
     if (!message) {
       return;
     }
 
-    // Currently managing to kind of commands:
+    // Currently managing three kinds of commands:
     // BT: bluetooth
     // HS: headset
     // * : general cases, not specific to hardware control
@@ -481,16 +552,41 @@ var OnCallHandler = (function onCallHandler() {
         endAndAnswer();
         break;
       case 'CHLD+ATA':
-        holdAndAnswer();
+        if (telephony.calls.length === 1) {
+          holdOrResumeSingleCall();
+        } else {
+          holdAndAnswer();
+        }
+        break;
+      default:
+        var partialCommand = message.substring(0, 3);
+        if (partialCommand === 'VTS') {
+          KeypadManager.press(message.substring(4));
+        }
         break;
     }
   }
 
+  var lastHeadsetPress = 0;
+
   function handleHSCommand(message) {
-    // We will receive the message for button released,
-    // we will ignore it
-    if (message == 'headset-button-release') {
-      return;
+    /**
+     * See bug 853132: plugging / unplugging some headphones might send a
+     * 'headset-button-press' / 'headset-button-release' message
+     * => if these two events happen in the same second, it's a click;
+     * => if these two events are too distant, ignore them.
+     */
+    switch (message) {
+      case 'headset-button-press':
+        lastHeadsetPress = Date.now();
+        return;
+        break;
+      case 'headset-button-release':
+        if ((Date.now() - lastHeadsetPress) > 1000)
+          return;
+        break;
+      default:
+        return;
     }
 
     if (telephony.active) {
@@ -554,11 +650,28 @@ var OnCallHandler = (function onCallHandler() {
   }
 
   function toggleCalls() {
+    if (CallScreen.incomingContainer.classList.contains('displayed')) {
+      return;
+    }
+
     if (handledCalls.length < 2) {
+      holdOrResumeSingleCall();
       return;
     }
 
     telephony.active.hold();
+  }
+
+  function holdOrResumeSingleCall() {
+    if (handledCalls.length !== 1) {
+      return;
+    }
+
+    if (telephony.active) {
+      telephony.active.hold();
+    } else {
+      telephony.calls[0].resume();
+    }
   }
 
   function ignore() {
@@ -569,6 +682,7 @@ var OnCallHandler = (function onCallHandler() {
   }
 
   function end() {
+    busyNotificationLock = false;
     // If there is an active call we end this one
     if (telephony.active) {
       telephony.active.hangUp();
@@ -589,8 +703,22 @@ var OnCallHandler = (function onCallHandler() {
     telephony.muted = false;
   }
 
+  function turnSpeakerOn() {
+    if (!telephony.speakerEnabled) {
+      telephony.speakerEnabled = true;
+      if (settings) {
+        settings.createLock().set({'telephony.speaker.enabled': true});
+      }
+    }
+  }
+
   function turnSpeakerOff() {
-    telephony.speakerEnabled = false;
+    if (telephony.speakerEnabled) {
+      telephony.speakerEnabled = false;
+      if (settings) {
+        settings.createLock().set({'telephony.speaker.enabled': false});
+      }
+    }
   }
 
   function toggleMute() {
@@ -598,7 +726,10 @@ var OnCallHandler = (function onCallHandler() {
   }
 
   function toggleSpeaker() {
-    telephony.speakerEnabled = !telephony.speakerEnabled;
+    if (telephony.speakerEnabled)
+      turnSpeakerOff();
+    else
+      turnSpeakerOn();
   }
 
   /* === Recents management === */
@@ -608,6 +739,24 @@ var OnCallHandler = (function onCallHandler() {
       entry: entry
     };
     postToMainWindow(message);
+  }
+
+  function notifyBusyLine() {
+    busyNotificationLock = true;
+    // ANSI call waiting tone for a 3 seconds window.
+    var sequence = [[480, 620, 500],
+                    [0, 0, 500],
+                    [480, 620, 500],
+                    [0, 0, 500],
+                    [480, 620, 500],
+                    [0, 0, 500]];
+    TonePlayer.playSequence(sequence);
+    setTimeout(function busyLineStopped() {
+      if (handledCalls.length === 0) {
+        busyNotificationLock = false;
+        exitCallScreen(true);
+      }
+    }, 3000);
   }
 
   return {
@@ -623,9 +772,12 @@ var OnCallHandler = (function onCallHandler() {
     toggleMute: toggleMute,
     toggleSpeaker: toggleSpeaker,
     unmute: unmute,
+    turnSpeakerOn: turnSpeakerOn,
     turnSpeakerOff: turnSpeakerOff,
 
-    addRecentEntry: addRecentEntry
+    addRecentEntry: addRecentEntry,
+
+    notifyBusyLine: notifyBusyLine
   };
 })();
 
@@ -636,12 +788,4 @@ window.addEventListener('load', function callSetup(evt) {
   CallScreen.init();
   CallScreen.syncSpeakerEnabled();
   KeypadManager.init(true);
-
-  if (navigator.mozSettings) {
-    var req = navigator.mozSettings.createLock().get('wallpaper.image');
-    req.onsuccess = function cs_wi_onsuccess() {
-      CallScreen.setCallerContactImage(
-        req.result['wallpaper.image'], false, true);
-    };
-  }
 });

@@ -1,5 +1,116 @@
 Calendar.App = (function(window) {
 
+  function PendingManager() {
+    this.objects = [];
+    this.pending = 0;
+
+    this.onstart = this.onstart.bind(this);
+    this.onend = this.onend.bind(this);
+  }
+
+  PendingManager.prototype = {
+
+    onpending: function() {},
+    oncomplete: function() {},
+
+    register: function(object) {
+      object.on(object.startEvent, this.onstart);
+      object.on(object.completeEvent, this.onend);
+
+      var wasPending = this.isPending();
+
+      this.objects.push(object);
+
+      if (object.pending) {
+        this.pending++;
+
+        if (!wasPending) {
+          this.onpending();
+        }
+      }
+    },
+
+    /**
+     * Unregister an object.
+     * Note it is intended that objects that
+     * are unregistered are never in a state
+     * where we are waiting for their pending
+     * status to complete. If an incomplete
+     * object is removed it will break .pending.
+     */
+    unregister: function(object) {
+      var idx = this.objects.indexOf(object);
+
+      if (idx !== -1) {
+        var object = this.objects[idx];
+        this.objects.splice(idx, 1);
+        return true;
+      }
+      return false;
+    },
+
+    isPending: function() {
+      var len = this.objects.length;
+      var i = 0;
+
+      for (; i < len; i++) {
+        if (this.objects[i].pending)
+          return true;
+      }
+
+      return false;
+    },
+
+    onstart: function() {
+      if (!this.pending) {
+        this.onpending();
+      }
+
+      this.pending++;
+    },
+
+    onend: function() {
+      this.pending--;
+      if (!this.pending) {
+        this.oncomplete();
+      }
+    }
+  };
+
+  var DateL10n = {
+    /**
+     * Localizes all elements with data-l10n-date-format.
+     */
+    localizeElements: function(parent) {
+      var elements = document.querySelectorAll(
+        '[data-l10n-date-format]'
+      );
+
+      var len = elements.length;
+      var i = 0;
+
+      for (; i < len; i++) {
+        DateL10n.localizeElement(elements[i]);
+      }
+    },
+
+    /**
+     * Localize a single element expected to have data-l10n-date-format.
+     */
+    localizeElement: function(element) {
+      var date = element.dataset.date;
+      var formatKey = element.dataset.l10nDateFormat;
+      var format = navigator.mozL10n.get(formatKey);
+
+      if (date) {
+        element.textContent = Calendar.App.dateFormat.localeFormat(
+          new Date(date),
+          format
+        );
+      }
+    }
+  };
+
   /**
    * Focal point for state management
    * within calendar application.
@@ -8,6 +119,10 @@ Calendar.App = (function(window) {
    * location to reference database.
    */
   var App = {
+    PendingManager: PendingManager,
+
+    DateL10n: DateL10n,
+
     //XXX: always assumes that app is never lazy loaded
     startingURL: window.location.href,
 
@@ -15,73 +130,7 @@ Calendar.App = (function(window) {
 
     _mozTimeRefreshTimeout: 3000,
 
-    // Dependency map for loading
-    cssBase: '/style/',
-    jsBase: '/js/',
-    dependencies: {
-      Store: {},
-      Style: {},
-      Templates: {},
-      Utils: {},
-      Views: {
-        AdvancedSettings: [
-          {type: 'Templates', name: 'Account'}
-        ],
-        CreateAccount: [
-         {type: 'Templates', name: 'Account'}
-        ],
-        ModifyAccount: [
-          {type: 'Utils', name: 'AccountCreation'},
-          {type: 'Style', name: 'ModifyAccountView'}
-        ],
-        Day: [
-          {type: 'Views', name: 'DayChild'},
-          {type: 'Views', name: 'TimeParent'}
-        ],
-        DayBased: [
-          {type: 'Utils', name: 'OrderedMap'}
-        ],
-        DayChild: [
-          {type: 'Templates', name: 'Day'},
-          {type: 'Utils', name: 'OrderedMap'},
-          {type: 'Utils', name: 'Overlap'},
-          {type: 'Views', name: 'DayBased'}
-        ],
-        ModifyEvent: [
-          {type: 'Style', name: 'ModifyEventView'},
-          {type: 'Utils', name: 'InputParser'}
-        ],
-        Month: [
-          {type: 'Templates', name: 'Month'},
-          {type: 'Views', name: 'MonthChild'},
-          {type: 'Views', name: 'TimeParent'}
-        ],
-        MonthChild: [
-          {type: 'Templates', name: 'Month'}
-        ],
-        MonthsDay: [
-          {type: 'Views', name: 'DayChild'}
-        ],
-        Settings: [
-          {type: 'Style', name: 'Settings'},
-          {type: 'Templates', name: 'Calendar'}
-        ],
-        TimeParent: [
-          {type: 'Utils', name: 'OrderedMap'}
-        ],
-        Week: [
-          {type: 'Style', name: 'WeekView'},
-          {type: 'Templates', name: 'Week'},
-          {type: 'Views', name: 'Day'},
-          {type: 'Views', name: 'WeekChild'}
-        ],
-        WeekChild: [
-          {type: 'Templates', name: 'Week'},
-          {type: 'Utils', name: 'OrderedMap'},
-          {type: 'Views', name: 'DayBased'}
-        ]
-      }
-    },
+    pendingClass: 'pending-operation',
 
     /**
      * Entry point for application
@@ -95,11 +144,109 @@ Calendar.App = (function(window) {
       this._providers = Object.create(null);
       this._views = Object.create(null);
       this._routeViewFn = Object.create(null);
+      this._pendingManger = new PendingManager();
+
+      var self = this;
+      this._pendingManger.oncomplete = function onpending() {
+        document.body.classList.remove(self.pendingClass);
+      };
+
+      this._pendingManger.onpending = function oncomplete() {
+        document.body.classList.add(self.pendingClass);
+      };
 
       this.timeController = new Calendar.Controllers.Time(this);
       this.syncController = new Calendar.Controllers.Sync(this);
       this.serviceController = new Calendar.Controllers.Service(this);
       this.alarmController = new Calendar.Controllers.Alarm(this);
+      this.errorController = new Calendar.Controllers.Error(this);
+
+      // observe sync events
+      this.observePendingObject(this.syncController);
+    },
+
+    /**
+     * Observes localized events and localizes elements
+     * with data-l10n-date-format should be registered
+     * after the first localized event.
+     *
+     *
+     * Example:
+     *
+     *
+     *    <span
+     *      data-date="Wed Jan 09 2013 19:25:38 GMT+0100 (CET)"
+     *      data-l10n-date-format="%x">
+     *
+     *      2013/9/19
+     *
+     *    </span>
+     *
+     */
+    observeDateLocalization: function() {
+      window.addEventListener('localized', DateL10n.localizeElements);
+    },
+
+    /**
+     * Adds observers to objects capable of being pending.
+     *
+     * Object must emit some kind of start/complete events
+     * and have the following properties:
+     *
+     *  - startEvent (used to register an observer)
+     *  - endEvent ( ditto )
+     *  - pending
+     *
+     * @param {Object} object to observe.
+     */
+    observePendingObject: function(object) {
+      this._pendingManger.register(object);
+    },
+
+    isPending: function() {
+      return this._pendingManger.isPending();
+    },
+
+    loadObject: function initializeLoadObject(name, callback) {
+
+      function loadObject(name, callback) {
+        this._loader.load('group', name, callback);
+      }
+
+      if (!this._pendingObjets) {
+        this._pendingObjets = [[name, callback]];
+      } else {
+        this._pendingObjets.push([name, callback]);
+        return;
+      }
+
+      // Loading NotAnd and the load config is not really needed
+      // for the initial load so we lazily load them the first time we
+      // need to load a file...
+
+      var pending = 2;
+      var self = this;
+
+      function next() {
+        if (!--pending) {
+          // initialize loader
+          NotAmd.nextTick = Calendar.nextTick;
+          self._loader = NotAmd(Calendar.LoadConfig);
+          self.loadObject = loadObject;
+
+          // begin processing existing requests
+          self._pendingObjets.forEach(function(pair) {
+            // ['ObjectName', function() { ... }]
+            loadObject.call(self, pair[0], pair[1]);
+          });
+
+        }
+
+        delete this._pendingObjets;
+      }
+
+      this.loadScript('/js/ext/notamd.js', next);
+      this.loadScript('/js/load_config.js', next);
     },
 
     /**
@@ -151,10 +298,11 @@ Calendar.App = (function(window) {
       this.modifier('/settings/', 'Settings', { clear: false });
       this.modifier('/advanced-settings/', 'AdvancedSettings');
 
-      this.state('/alarm-display/:id', 'ModifyEvent', { path: false });
+      this.state('/alarm-display/:id', 'ViewEvent', { path: false });
 
-      this.state('/add/', 'ModifyEvent');
-      this.state('/event/:id', 'ModifyEvent');
+      this.state('/event/add/', 'ModifyEvent');
+      this.state('/event/edit/:id', 'ModifyEvent');
+      this.state('/event/show/:id', 'ViewEvent');
 
       this.modifier('/select-preset/', 'CreateAccount');
       this.modifier('/create-account/:preset', 'ModifyAccount');
@@ -185,6 +333,9 @@ Calendar.App = (function(window) {
 
       this.dateFormat = navigator.mozL10n.DateTimeFormat();
 
+      // re-localize dates on screen
+      this.observeDateLocalization();
+
       this.timeController.observe();
       this.alarmController.observe();
 
@@ -196,7 +347,7 @@ Calendar.App = (function(window) {
       this.timeController.move(new Date());
 
       this.view('TimeHeader', function(header) {
-          header.render();
+        header.render();
       });
 
       this.view('CalendarColors', function(colors) {
@@ -205,6 +356,20 @@ Calendar.App = (function(window) {
 
       document.body.classList.remove('loading');
       this._routes();
+
+      setTimeout(this.loadDOM.bind(this), 0);
+
+       //lazy load recurring event expander so as not to impact initial load.
+      this.loadObject('Controllers.RecurringEvents', function() {
+        self.recurringEventsController =
+          new Calendar.Controllers.RecurringEvents(self);
+
+        self.observePendingObject(
+          self.recurringEventsController
+        );
+
+        self.recurringEventsController.observe();
+      });
     },
 
     /**
@@ -249,80 +414,52 @@ Calendar.App = (function(window) {
     },
 
     /**
-     * Loads a resource and all of it's dependencies
-     * @param {String} type of resource to load (folder name).
-     * @param {String} name view name.
-     * @param {Function} callback after all resources are loaded.
+     * Why is this random function here???
+     * To load the lazy loader... then this is used there.
      */
-    loadResource: function(type, name, cb) {
+    loadScript: function(source, cb) {
+      var el = document.createElement('script');
+      el.src = source;
+      el.type = 'text/javascript';
+      el.async = false;
+      el.defer = true;
 
-      var file, script, classes = [];
-
-      var head = document.getElementsByTagName('head')[0];
-
-      var self = this;
-
-      /**
-       * Appends a script to the dom
-       */
-      var appendScript = function(config, cb) {
-        // lowercase_and_underscore the view to get the filename
-        file = config.name.replace(/([A-Z])/g, '_$1')
-          .replace(/^_/, '').toLowerCase();
-
-        if (config.type == 'Style') {
-          script = document.createElement('link');
-          script.type = 'text/css';
-          script.rel = 'stylesheet';
-          script.href = self.cssBase + file + '.css';
-          head.appendChild(script);
-          return cb();
-        }
-
-        script = document.createElement('script');
-        script.type = 'text/javascript';
-        script.src = self.jsBase + config.type.toLowerCase() +
-          '/' + file + '.js';
-
-        if (cb) script.onload = cb;
-        head.appendChild(script);
+      el.onerror = function scriptError(err) {
+        cb(new Error('could not load script "' + source + '"'));
       };
 
-      /**
-       * Process a dependency node
-       * Ensures all sub-dependencies are processed
-       */
-      function processScripts(node, cb) {
+      el.onload = function scriptLoad() {
+        cb();
+      };
 
-        // If there are no dependencies, or we already have this resource
-        // loaded, bail out
-        if (!App.dependencies[node.type] || (Calendar[node.type] &&
-              Calendar[node.type][node.name])) {
-            return cb();
+      document.head.appendChild(el);
+    },
+
+    /**
+     * Loads delayed DOM nodes specified by div.delay
+     * Each .delay node has a single comment with markup
+     * This gets us to the initial render ~400ms faster
+     */
+    loadDOM: function() {
+      var delayedNodes = document.querySelectorAll('.delay');
+      for (var i = 0, node; node = delayedNodes[i]; i++) {
+        var newEl = document.createElement('div');
+        newEl.innerHTML = node.childNodes[0].nodeValue;
+
+        // translate content
+        navigator.mozL10n.translate(newEl);
+
+        var parent = node.parentNode;
+        var lastEl = node.nextElementSibling;
+        var child;
+        while (child = newEl.children[0]) {
+          parent.insertBefore(child, lastEl);
         }
 
-        var dependencies = App.dependencies[node.type][node.name];
-        var numDependencies = dependencies ? dependencies.length : 0;
-        var counter = 0;
-
-        if (numDependencies > 0) {
-          !function processRemaining() {
-            var toProcess = dependencies.shift();
-            processScripts(toProcess, function() {
-              counter++;
-              if (counter >= numDependencies) {
-                appendScript(node, cb);
-              } else {
-                processRemaining();
-              }
-            });
-          }();
-
-        } else {
-          appendScript(node, cb);
-        }
+        parent.removeChild(node);
       }
-      processScripts({type: type, name: name}, cb);
+
+      this.view('Errors');
     },
 
     /**
@@ -336,6 +473,12 @@ Calendar.App = (function(window) {
       }
 
       return this._providers[name];
+    },
+
+    _initView: function(name) {
+      this._views[name] = new Calendar.Views[name]({
+        app: this
+      });
     },
 
     /**
@@ -361,19 +504,32 @@ Calendar.App = (function(window) {
      * @param {Function} view loaded callback.
      */
     view: function(name, cb) {
-      if (!(name in this._views)) {
-        this.loadResource('Views', name, function() {
-          this._views[name] = new Calendar.Views[name]({
-            app: this
-          });
-          cb.call(this, this._views[name]);
-        }.bind(this));
+      var self = this;
 
-      } else {
-          cb.call(this, this._views[name]);
+      if (!(name in this._views)) {
+
+        if (name in Calendar.Views) {
+          this._initView(name);
+
+          if (cb) {
+            cb.call(self, self._views[name]);
+          }
+        } else {
+          this.loadObject('Views.' + name, function() {
+            self._initView(name);
+
+            if (cb) {
+              cb.call(self, self._views[name]);
+            }
+          });
+        }
+
+      } else if (cb) {
+        Calendar.nextTick(function() {
+          cb.call(self, self._views[name]);
+        });
       }
     },
-
 
     /**
      * Pure convenience function for
@@ -384,6 +540,13 @@ Calendar.App = (function(window) {
      */
     store: function(name) {
       return this.db.getStore(name);
+    },
+
+    /**
+     * Returns the offline status.
+     */
+    offline: function() {
+      return (navigator && 'onLine' in navigator) ? !navigator.onLine : true;
     }
   };
 

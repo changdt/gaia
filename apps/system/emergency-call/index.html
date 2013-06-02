@@ -14,6 +14,7 @@
     <!-- Specific code -->
     <script defer type="application/javascript" src="js/keypad.js"></script>
     <script defer type="application/javascript" src="js/dialer.js"></script>
+    <link rel="stylesheet" href="/shared/style/responsive.css" >
   </head>
   <body class="hidden">
     <article id="views" role="tablist">
@@ -138,7 +139,7 @@
           </section>
           <section id="keypad-callbar">
             <span role="button" id="keypad-callbar-cancel" data-type="action" data-value="cancel" >
-              <div>Cancel</div>
+              <div data-l10n-id="cancel">Cancel</div>
             </span>
             <span role="button" id="keypad-callbar-call-action" data-type="action" data-value="make-call">
               <div>
@@ -147,52 +148,6 @@
           </section>
         </article>
       </section>
-    </article>
-    <article id="call-screen" class="grid">
-      <article id="calls">
-        <section>
-          <div id="emergency-number" class="number">
-          </div>
-          <div class="fake-number">
-          </div>
-          <div class="additionalContactInfo">
-            <span >Emergency call</span>
-          </div>
-          <div class="duration">
-            <span></span>
-            <div class="direction">
-              <div>
-              </div>
-            </div>
-          </div>
-        </section>
-      </article>
-      <article id="main-container" class="grid-row">
-        <div id="actions-container" class="grid-wrapper grid">
-          <footer id="call-options" class="grid-row">
-            <div class="grid-wrapper grid">
-              <section id="co-advanced" class="grid-row">
-                <div class="grid-wrapper grid">
-                  <span class="grid-cell options-column">
-                    <button id="speaker" class="co-advanced-option grid-wraper grid">
-                      <span>
-                      </span>
-                    </button>
-                  </span>
-                </div>
-              </section>
-              <footer id="callbar">
-                <div id="callbar-hang-up">
-                  <span role="button" id="callbar-hang-up-action" class="callbar-button">
-                    <div>
-                    </div>
-                  </span>
-                </div>
-              </footer>
-            </div>
-          </footer>
-        </div>
-      </article>
     </article>
   </body>
 </html>

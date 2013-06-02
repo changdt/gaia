@@ -61,7 +61,10 @@
   Factory.define('remote.event', {
     properties: {
       location: 'location',
-      isRecurring: false
+      isRecurring: false,
+      alarms: [
+        {action: 'DISPLAY', trigger: 60000}
+      ]
       //XXX: raw data
     },
 
@@ -199,8 +202,14 @@
   });
 
   Factory.define('icalComponent', {
+    oncreate: function(obj) {
+      if (obj.lastRecurrenceId && obj.lastRecurrenceId instanceof Date) {
+        obj.lastRecurrenceId = Calc.dateToTransport(obj.lastRecurrenceId);
+      }
+    },
+
     properties: {
-      data: { icalData: true }
+      ical: 'fooo!'
     }
   });
 

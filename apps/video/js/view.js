@@ -11,51 +11,79 @@
  */
 navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
   var dom = {};            // document elements
-  var screenLock;          // keep the screen on when playing
   var playing = false;
   var endedTimer;
   var controlShowing = false;
   var controlFadeTimeout = null;
   var dragging = false;
   var data = activity.source.data;
+  var blob = data.blob;
+  var type = data.type;
   var url = data.url;
   var title = data.title || '';
+  var storage;       // A device storage object used by the save button
+  var saved = false; // Did we save it?
 
-  if (data.status === 'fail' || data.errorcode) {
-    // This only happens when we're invoked for youtube videos
-    // Display an error message, but make sure we're localized first
-    if (navigator.mozL10n.readyState === 'complete') {
-      handleError(data.reason);
-    }
-    else {
-      window.addEventListener('localized', function handleLocalized() {
-        window.removeEventListener('localized', handleLocalized);
-        handleError(data.reason);
+  initUI();
+
+  // If blob exists, video should be launched by open activity
+  if (blob) {
+    // The title we display for this video may be explicitly specified,
+    // or it might be the specified filename to save to or it might be
+    // the filename of the blob.
+    title = data.title || baseName(data.filename) || baseName(blob.name);
+    url = URL.createObjectURL(blob);
+
+    // If the app that initiated this activity wants us to allow the
+    // user to save this blob as a file, and if device storage is available
+    // and if there is enough free space, then display a save button.
+    if (data.allowSave && data.filename) {
+      getStorageIfAvailable('videos', blob.size, function(ds) {
+        storage = ds;
+        dom.menu.hidden = false;
       });
     }
   }
-  else {
-    initUI();
+
+  if (type !== 'video/youtube') {
     showPlayer(url, title);
+    return;
+  }
+
+  // This is the youtube case. We need to ensure that we have been
+  // localized before trying to fetch the youtube video so youtube
+  // knows what language to send errors to us in.
+  // XXX: show a loading spinner here?
+  if (navigator.mozL10n.readyState === 'complete') {
+    getYoutubeVideo(url, showPlayer, handleError);
+  }
+  else {
+    window.addEventListener('localized', function handleLocalized() {
+      window.removeEventListener('localized', handleLocalized);
+      getYoutubeVideo(url, showPlayer, handleError);
+    });
   }
 
   function handleError(message) {
-    // Remove any HTML tags from the youtube error message
-    var div = document.createElement('div');
-    div.innerHTML = message;
-    message = div.textContent;
+    // Start with a localized error message prefix
+    var error = navigator.mozL10n.get('youtube-error-prefix');
 
-    // Get a localized error message prefix
-    var prefix = navigator.mozL10n.get('youtube-error-prefix');
+    if (message) {
+      // Remove any HTML tags from the youtube error message
+      var div = document.createElement('div');
+      div.innerHTML = message;
+      message = div.textContent;
+      error += '\n\n' + message;
+    }
 
     // Display the error message to the user
     // XXX Using alert() is simple but ugly.
-    alert(prefix + '\n\n' + message);
+    alert(error);
 
     // When the user clicks okay, end the activity.
     // Do this on a timer so the alert has time to go away.
     // Otherwise it appears to remain up over the caller and the user
-    // has to dismiss it twice.
+    // has to dismiss it twice. See bug 825435.
     setTimeout(function() { activity.postResult({}); }, 50);
   }
 
@@ -64,10 +92,11 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
     // so we'll play the video without going into fullscreen mode.
 
     // Get all the elements we use by their id
-    var ids = ['player', 'videoFrame', 'videoControls',
+    var ids = ['player', 'fullscreen-view', 'crop-view', 'videoControls',
                'close', 'play', 'playHead',
                'elapsedTime', 'video-title', 'duration-text', 'elapsed-text',
-               'slider-wrapper'];
+               'slider-wrapper', 'spinner-overlay',
+               'menu', 'save', 'banner', 'message'];
 
     ids.forEach(function createElementRef(name) {
       dom[toCamelCase(name)] = document.getElementById(name);
@@ -93,7 +122,6 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
     });
 
     dom.player.addEventListener('timeupdate', timeUpdated);
-    dom.player.addEventListener('ended', playerEnded);
 
     // Set the 'lang' and 'dir' attributes to <html> when the page is translated
     window.addEventListener('localized', function showBody() {
@@ -125,6 +153,8 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
         pause();
     } else if (event.target == dom.close) {
       done();
+    } else if (event.target == dom.save) {
+      save();
     } else if (event.target == dom.sliderWrapper) {
       dragSlider(event);
     } else {
@@ -133,7 +163,6 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
   }
 
   function done() {
-    // release our screen lock
     pause();
 
     // Release any video resources
@@ -141,45 +170,45 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
     dom.player.load();
 
     // End the activity
-    activity.postResult({});
+    activity.postResult({saved: saved});
   }
 
-  // Make the video fit the container
+  function save() {
+    // Hide the menu that holds the save button: we can only save once
+    dom.menu.hidden = true;
+    // XXX work around bug 870619
+    dom.videoTitle.textContent = dom.videoTitle.textContent;
+
+    getUnusedFilename(storage, data.filename, function(filename) {
+      var savereq = storage.addNamed(blob, filename);
+      savereq.onsuccess = function() {
+        // Remember that it has been saved so we can pass this back
+        // to the invoking app
+        saved = filename;
+        // And tell the user
+        showBanner(navigator.mozL10n.get('saved', { title: title }));
+      };
+      savereq.onerror = function(e) {
+        // XXX we don't report this to the user because it is hard to
+        // localize.
+        console.error('Error saving', filename, e);
+      };
+    });
+  }
+
+  // Align vertically fullscreen view
   function setPlayerSize() {
-    var containerWidth = window.innerWidth;
-    var containerHeight = window.innerHeight;
-
-    // Don't do anything if we don't know our size.
-    // This could happen if we get a resize event before our metadata loads
-    if (!dom.player.videoWidth || !dom.player.videoHeight)
-      return;
-
-    var width = dom.player.videoWidth;
-    var height = dom.player.videoHeight;
-    var xscale = containerWidth / width;
-    var yscale = containerHeight / height;
-    var scale = Math.min(xscale, yscale);
-
-    // scale large videos down, but don't scale small videos up
-    if (scale < 1) {
-      width *= scale;
-      height *= scale;
-    }
-
-    var left = ((containerWidth - width) / 2);
-    var top = ((containerHeight - height) / 2);
-
-    var transform = 'translate(' + left + 'px,' + top + 'px)';
-
-    if (scale < 1) {
-      transform += ' scale(' + scale + ')';
-    }
-
-    dom.player.style.transform = transform;
+    var containerHeight = (window.innerHeight > dom.player.offsetHeight) ?
+      window.innerHeight : dom.player.offsetHeight;
+    dom.cropView.style.marginTop = (containerHeight / 2) * -1 + 'px';
+    dom.cropView.style.height = containerHeight + 'px';
   }
 
   // show video player
   function showPlayer(url, title) {
+    // Dismiss the spinner
+    dom.spinnerOverlay.classList.add('hidden');
+
     dom.videoTitle.textContent = title || '';
     dom.player.src = url;
     dom.player.onloadedmetadata = function() {
@@ -199,18 +228,7 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
 
       play();
     };
-  }
-
-  function playerEnded() {
-    if (dragging) {
-      return;
-    }
-    if (endedTimer) {
-      clearTimeout(endedTimer);
-      endedTimer = null;
-    }
-    // When the video is done, go right back to the calling app
-    done();
+    dom.player.onloadeddata = function(evt) { URL.revokeObjectURL(url); };
   }
 
   function play() {
@@ -220,10 +238,6 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
     // Start playing
     dom.player.play();
     playing = true;
-
-    // Don't let the screen go to sleep
-    if (!screenLock)
-      screenLock = navigator.requestWakeLock('screen');
   }
 
   function pause() {
@@ -233,12 +247,6 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
     // Stop playing the video
     dom.player.pause();
     playing = false;
-
-    // Let the screen go to sleep
-    if (screenLock) {
-      screenLock.unlock();
-      screenLock = null;
-    }
   }
 
   // Update the progress bar and play head as the video plays
@@ -261,22 +269,6 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
       // Don't move the play head if the user is dragging it.
       if (!dragging)
         dom.playHead.style.left = percent;
-    }
-
-    // Since we don't always get reliable 'ended' events, see if
-    // we've reached the end this way.
-    // See: https://bugzilla.mozilla.org/show_bug.cgi?id=783512
-    // If we're within 1 second of the end of the video, register
-    // a timeout a half a second after we'd expect an ended event.
-    if (!endedTimer) {
-      if (!dragging && dom.player.currentTime >= dom.player.duration - 1) {
-        var timeUntilEnd = (dom.player.duration - dom.player.currentTime + .5);
-        endedTimer = setTimeout(playerEnded, timeUntilEnd * 1000);
-      }
-    } else if (dragging && dom.player.currentTime < dom.player.duration - 1) {
-      // If there is a timer set and we drag away from the end, cancel the timer
-      clearTimeout(endedTimer);
-      endedTimer = null;
     }
   }
 
@@ -348,5 +340,20 @@ navigator.mozSetMessageHandler('activity', function viewVideo(activity) {
       return padLeft(minutes, 2) + ':' + padLeft(seconds, 2);
     }
     return '';
+  }
+
+  function showBanner(msg) {
+    dom.message.textContent = msg;
+    dom.banner.hidden = false;
+    setTimeout(function() {
+      dom.banner.hidden = true;
+    }, 3000);
+  }
+
+  // Strip directories and just return the base filename
+  function baseName(filename) {
+    if (!filename)
+      return '';
+    return filename.substring(filename.lastIndexOf('/') + 1);
   }
 });

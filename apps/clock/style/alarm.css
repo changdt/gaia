@@ -16,7 +16,8 @@ a.button, span.button {
   text-align: center;
   text-decoration: none;
   cursor: pointer;
-  font: bold 1.25rem 'MozTT', sans-serif;
+  font-weight: bold;
+  font-size: 1.25rem;
   line-height: 1.38rem;
   -moz-border-top-colors: #6F6F6F #4D4D4D #4D4D4D #6F6F6F;
   -moz-border-right-colors: #6F6F6F #4D4D4D #4D4D4D #6F6F6F;
@@ -73,7 +74,7 @@ a.button.right {
 }
 
 a.button.right.plus {
-  background: url(images/add_alarm.png) no-repeat center;
+  background: url(images/add_alarm.png) no-repeat center / 3.2rem;
   padding: 2.2rem 1.5rem;
   height: 2.5rem;
   width: 3.2rem;
@@ -108,7 +109,7 @@ a.abstract-menu {
   padding-left: 7.50rem;
   outline: 0;
   color: black;
-  font: 1.9rem 'MozTT',sans-serif;
+  font-size: 1.9rem;
   padding-top: 1.05rem;
   padding-bottom: 1.25rem;
 }
@@ -120,7 +121,8 @@ select.abstract-menu {
 
 #alarm-delete {
   color: #F2F2F2;
-  font: 1.50rem/1.50rem 'MozTT',sans-serif;
+  line-height: 1.5rem;
+  font-size: 1.5rem;
   text-align: center;
   text-decoration: none;
   width: 100%;
@@ -247,7 +249,7 @@ li.picker:active {
 }
 
 .view-alarm-lbl {
-  font: 1.40rem 'MozTT',sans-serif;
+  font-size: 1.40rem;
   pointer-events: none;
   margin-top: 1.4rem;
   color: #505859;
@@ -293,7 +295,7 @@ ul li > a, ul li > span, ul li > small { /* text ellipsis */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  width: -moz-calc(100% - 8.13rem);
+  width: -moz-calc(100% - 4.5rem);
 }
 
 ul li > span {
@@ -328,13 +330,13 @@ ul li > small {
 }
 
 #alarms label input[type="checkbox"] + span {
-  background: url(images/alarm_off.png) no-repeat center top;
+  background: url(images/alarm_off.png) no-repeat center top / 3.4rem;
   width: 3.4rem;
   height: 3.4rem;
 }
 #alarms label input[type="checkbox"]:checked + span {
   border-color: #00acce;
-  background: url(images/alarm_on.png) no-repeat center top;;
+  background: url(images/alarm_on.png) no-repeat center top / 3.4rem;
 }
 
 #alarms label span {
@@ -342,6 +344,11 @@ ul li > small {
   right: 0.5rem;
   top: 1.2rem;
   margin: 0;
+}
+
+#alarms a {
+  padding-bottom: 0;
+  height: 100%;
 }
 
 /* fake input boxes for checkboxes & radio buttons */
@@ -415,7 +422,7 @@ select.right {
 }
 
 input.right {
-  font: 1.9rem 'MozTT',sans-serif;
+  font-size: 1.9rem;
   margin: 0.37rem 0.5rem 0.19rem 6.6rem;
   width: -moz-calc(100% - 8.5rem);
   border: 0.06rem solid #CBCBCC;
@@ -423,6 +430,10 @@ input.right {
   background: #FFFFFF;
   height: 2.8rem;
   color: black;
+}
+
+input.right:-moz-placeholder {
+  color: gray;
 }
 /* ----------- Input Error ---------- */
 input ~ * {
@@ -462,7 +473,7 @@ input ~ *:empty {
 }
 
 #alarms li {
-  background: url(images/alarm_sep.png) top no-repeat;
+  background: url(images/alarm_sep.png) no-repeat top / 29rem;
   padding-top: 0.2rem;
   padding-left: 0.8rem;
 }
@@ -481,7 +492,7 @@ input ~ *:empty {
 li img {
   position: absolute;
   vertical-align: middle;
-  margin-right:0.63rem;
+  margin-right: 0.63rem;
 }
 
 .description {
@@ -492,7 +503,8 @@ li img {
 }
 
 .alarmList-time span.time {
-  font: lighter 2.8rem 'MozTT', sans-serif;
+  font-weight: lighter;
+  font-size: 2.8rem;
   margin-right: 0.4rem;
   color: #CFE2E5;
   height: auto;
@@ -500,14 +512,14 @@ li img {
 
 .alarmList-time span.hour24-state {
   height: auto;
-  font: 1.4rem 'MozTT', sans-serif;
+  font-size: 1.4rem;
   color: #5C6466;
   margin-left: -0.25rem;
   text-transform: uppercase;
 }
 
 .alarmList-detail .label {
-  font: 1.4rem 'MozTT', sans-serif;
+  font-size: 1.4rem;
   text-overflow: ellipsis;
   position: absolute;
   overflow: hidden;
@@ -518,8 +530,7 @@ li img {
 }
 
 .alarmList-detail .repeat {
-  font: 1.4rem 'MozTT', sans-serif;
-  text-transform: capitalize;
+  font-size: 1.4rem;
   text-overflow: ellipsis;
   position: absolute;
   overflow: hidden;
@@ -548,7 +559,7 @@ li img {
   margin-left: auto;
   margin-right: auto;
   border-bottom: solid 0.13rem;
-  -moz-border-bottom-colors: #CBCBCC #FFFFFF; 
+  -moz-border-bottom-colors: #CBCBCC #FFFFFF;
 }
 
 #picker-bar.format12h {}
@@ -586,7 +597,7 @@ li img {
 }
 
 #value-indicator-wrapper {
-  background: url(/style/images/picker_label.png) no-repeat -6px 0;
+  background: url(/style/images/picker_label.png) no-repeat -0.6rem 0 / 28.2rem;
   position: absolute;
   top: 5.6rem;
   height: 6rem;
@@ -596,7 +607,7 @@ li img {
 
 #value-indicator-left,
 #value-indicator-right {
-  background: url(/style/images/picker_label.png) no-repeat 0 0;
+  background: url(/style/images/picker_label.png) no-repeat 0 0 / 28.2rem;
   position: absolute;
   width: 0.6rem;
   height: 6rem;
@@ -613,7 +624,9 @@ li img {
 }
 
 #value-indicator-hover-time {
-  font: lighter 1.88rem/3.75rem 'MozTT',sans-serif;
+  font-weight: lighter;
+  font-size: 1.88rem;
+  line-height: 3.75rem;
   pointer-events: none;
   position: absolute;
   text-align: center;
@@ -696,7 +709,7 @@ div.animation-on {
 
 .picker-unit {
   position: relative;
-  font: 2.2rem 'MozTT',sans-serif;
+  font-size: 2.2rem;
   color: black;
   text-align: center;
   vertical-align: middle;
@@ -708,7 +721,7 @@ div.animation-on {
 }
 .picker-unit.active {
   color: #FFFFFF;
-  font-size: 3.2rem;
+  transform: scale(1.5, 1.5);
 }
 
 #picker-bar-background {
@@ -763,32 +776,4 @@ div.animation-on {
   display: none;
 }
 
-/* 320x480 phones */
-@media screen and (width: 320px) {
-  html {
-    font-size: 10px;
-  }
-}
 
-/* 480x800 phones */
-@media screen and (width: 480px) {
-  html {
-    font-size: 10px;
-  }
-  .alarmList-detail {
-    margin-left: 0.31rem; 
-  }
-  .alarmList-time span.time {
-    font: 2.25rem/2.25rem 'MozTT', sans-serif;
-  }
-  .alarmList-time span.hour24-state {
-    font: 1rem/1rem 'MozTT', sans-serif;
-    margin-left: -0.19rem;
-  }
-  .alarmList-detail .label {
-    font: 1.25rem/1.25rem 'MozTT', sans-serif;
-  }
-  .alarmList-detail .repeat {
-    font: 1.13rem/1.13rem 'MozTT', sans-serif;
-  }
-}

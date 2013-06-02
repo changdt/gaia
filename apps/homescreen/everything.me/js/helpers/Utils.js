@@ -21,8 +21,15 @@ Evme.Utils = new function Evme_Utils() {
             "GET_APP_NAME": "get-app-name"
         };
     
-    this.isKeyboardVisible = false;
     
+    this.devicePixelRatio =  window.innerWidth / 320;
+
+    this.isKeyboardVisible = false;
+
+    this.EMPTY_IMAGE = "../../images/empty.gif";
+
+    this.APPS_FONT_SIZE = 13 * self.devicePixelRatio;
+
     this.ICONS_FORMATS = {
         "Small": 10,
         "Large": 20
@@ -38,7 +45,19 @@ Evme.Utils = new function Evme_Utils() {
     };
     
     this.log = function log(message) {
-        dump("(" + (new Date().getTime()) + ") DOAT: " + message);
+        var t = new Date(),
+            h = t.getHours(),
+            m = t.getMinutes(),
+            s = t.getSeconds(),
+            ms = t.getMilliseconds();
+        
+        h < 10 && (h = '0' + h);
+        m < 10 && (m = '0' + m);
+        s < 10 && (s = '0' + s);
+        ms < 10 && (ms = '00' + ms) ||
+        ms < 100 && (ms = '0' + ms);
+        
+        console.log("[%s EVME]: %s", [h, m, s, ms].join(':'), message);
     };
     
     this.l10n = function l10n(module, key, args) {
@@ -70,6 +89,15 @@ Evme.Utils = new function Evme_Utils() {
             translation = text[currentLang] || text[firstLanguage] || '';
         
         return translation;
+    };
+    
+    this.shortcutIdToKey = function l10nShortcutKey(experienceId) {
+        var map = Evme.__config.shortcutIdsToL10nKeys || {};
+        return map[experienceId.toString()] || experienceId;
+    };
+    
+    this.uuid = function generateUUID() {
+        return Evme.uuid();
     };
     
     this.sendToOS = function sendToOS(type, data) {
@@ -112,6 +140,42 @@ Evme.Utils = new function Evme_Utils() {
     this.cloneObject = function cloneObject(obj) {
         return JSON.parse(JSON.stringify(obj));
     };
+    
+    // remove installed apps from clouds apps
+    this.dedupInstalledApps = function dedupInstalledApps(apps, installedApps) {
+      var dedupCloudAppsBy = [];
+      
+      // first construct the data to filter by (an array of objects)
+      // currently only the URL is relevant
+      for (var i=0, appData; appData=installedApps[i++];) {
+        dedupCloudAppsBy.push({
+          'favUrl': appData.favUrl,
+          'appUrl': appData.favUrl
+        });
+      }
+      
+      return self.dedup(apps, dedupCloudAppsBy);
+    };
+    
+    // remove from arrayOrigin according to rulesToRemove
+    // both arguments are arrays of objects
+    this.dedup = function dedup(arrayOrigin, rulesToRemove) {
+      for (var i=0,item; item=arrayOrigin[i++];) {
+        for (var j=0,rule; rule=rulesToRemove[j++];) {
+          for (var property in rule) {
+            // if one of the conditions was met,
+            // remove the item and continue to next item
+            if (item[property] === rule[property]) {
+              arrayOrigin.splice(i-1, 1);
+              j = rulesToRemove.length;
+              break;
+            }
+          }
+        }
+      }
+      
+      return arrayOrigin;
+    };
 
     this.getRoundIcon = function getRoundIcon(imageSrc, callback) {
         var size = self.sendToOS(self.OSMessages.GET_ICON_SIZE) - 2,
@@ -136,9 +200,87 @@ Evme.Utils = new function Evme_Utils() {
         img.src = imageSrc;
     };
     
+    this.writeTextToCanvas = function writeTextToCanvas(options) {
+      var context = options.context,
+          text = options.text.split(' '),
+          offset = options.offset || 0,
+          lineWidth = 0,
+          currentLine = 0,
+          textToDraw = [],
+
+          WIDTH = context.canvas.width,
+          FONT_SIZE = self.APPS_FONT_SIZE,
+          LINE_HEIGHT = FONT_SIZE + 1 * self.devicePixelRatio;
+
+      if (!context || !text) {
+        return false;
+      }
+
+      context.textAlign = 'center';
+      context.textBaseline = 'top';
+      context.fillStyle = 'rgba(255,255,255,1)';
+      context.shadowOffsetX = 1;
+      context.shadowOffsetY = 1;
+      context.shadowBlur = 3;
+      context.shadowColor = 'rgba(0, 0, 0, 0.6)';
+      context.font = '300 ' + FONT_SIZE + 'px Feura Sans';
+
+      for (var i=0,word; word=text[i++];) {
+        // add 1 to the word with because of the space between words
+        var size = context.measureText(word).width + 1,
+            draw = false,
+            pushed = false;
+
+        if (lineWidth + size >= WIDTH) {
+          draw = true;
+          if (textToDraw.length === 0) {
+            textToDraw.push(word);
+            pushed = true;
+          }
+        }
+
+        if (draw) {
+          drawText(textToDraw, WIDTH/2, offset + currentLine*LINE_HEIGHT);
+          currentLine++;
+          textToDraw = [];
+          lineWidth = 0;
+        }
+
+        if (!pushed) {
+          textToDraw.push(word);
+          lineWidth += size;
+        }
+      }
+
+      if (textToDraw.length > 0) {
+        drawText(textToDraw, WIDTH/2, offset + currentLine*LINE_HEIGHT);
+      }
+      
+      function drawText(text, x, y) {
+        var isSingleWord = text.length === 1,
+            text = text.join(' '),
+            size = context.measureText(text).width;
+        
+        if (isSingleWord && size >= WIDTH) {
+          while (size >= WIDTH) {
+            text = text.substring(0, text.length-1);
+            size = context.measureText(text + '…').width;
+          }
+          
+          text += '…';
+        }
+        
+        context.fillText(text, x, y);
+      }
+
+      return true;
+    };
+    
     this.isNewUser = function isNewUser() {
         if (newUser === undefined) {
-            newUser = !Evme.Storage.get("counter-ALLTIME");
+            Evme.Storage.get("counter-ALLTIME", function storageGot(value) {
+                newUser = !value;
+            });
         }
         return newUser;
     };
@@ -146,6 +288,9 @@ Evme.Utils = new function Evme_Utils() {
     this.formatImageData = function formatImageData(image) {
         if (!image || typeof image !== "object") {
             return image;
+        }
+        if (self.isBlob(image)) {
+            return self.EMPTY_IMAGE;
         }
         if (!image.MIMEType || image.data.length < 10) {
             return null;
@@ -161,6 +306,27 @@ Evme.Utils = new function Evme_Utils() {
     this.getIconsFormat = function getIconsFormat() {
         return iconsFormat || _getIconsFormat();
     };
+
+    this.isBlob = function isBlob(arg) {
+        return arg instanceof Blob;
+    };
+
+    this.blobToDataURI = function blobToDataURI(blob, cbSuccess, cbError) {
+        if (!self.isBlob(blob)) {
+            cbError && cbError();
+            return;
+        }
+
+        var reader = new FileReader();
+        reader.onload = function() {
+            cbSuccess(reader.result);
+        };
+        reader.onerror = function() {
+            cbError && cbError();
+        };
+
+        reader.readAsDataURL(blob);
+    }
 
     this.setKeyboardVisibility = function setKeyboardVisibility(value){
     	if (self.isKeyboardVisible === value) return;
@@ -179,7 +345,7 @@ Evme.Utils = new function Evme_Utils() {
     };
 
     this.isOnline = function isOnline(callback) {
-        Connection.online(callback);
+       Connection.online(callback);
     };
 
     this.getUrlParam = function getUrlParam(key) {
@@ -242,10 +408,7 @@ Evme.Utils = new function Evme_Utils() {
     };
     
     this.Apps = new function Apps() {
-        var self = this,
-            timeoutAppsToDrawLater = null;
-
-        var TIMEOUT_BEFORE_DRAWING_REST_OF_APPS = 100;
+        var self = this;
         
         this.print = function print(options) {
             var apps = options.apps,
@@ -260,39 +423,20 @@ Evme.Utils = new function Evme_Utils() {
                 iconsResult = {
                     "cached": [],
                     "missing": []
-                },
-                doLater = [];
-
-            window.clearTimeout(timeoutAppsToDrawLater);
+                };
 
             var docFrag = document.createDocumentFragment();
-            for (var i=0; i<apps.length; i++) {
-                var app = new Evme.App(apps[i], numAppsOffset+i, isMore, self);
-                var id = apps[i].id;
-                var icon = app.getIcon();
+            for (var i=0,appData; appData=apps[i++];) {
+                appData.iconFormat = iconsFormat;
 
-                icon = Evme.IconManager.parse(id, icon, iconsFormat);
-                app.setIcon(icon);
-                
-                if (Evme.Utils.isKeyboardVisible && (isMore || i<Math.max(apps.length/2, 8))) {
-                    var elApp = app.draw();
-                    docFrag.appendChild(elApp);
-                } else {
-                    doLater.push(app);
-                }
+                var app = new Evme.App(appData, numAppsOffset+i, isMore, self),
+                    id = appData.id;
 
-                if (app.missingIcon()) {
-                    if (!icon) {
-                        icon = id;
-                    }
-                    iconsResult["missing"].push(icon);
-                } else {
-                    iconsResult["cached"].push(icon);
-                }
+                docFrag.appendChild(app.draw());
 
-                appsList[id] = appsList;
+                appsList['' + id] = app;
 
-                if (apps[i].installed) {
+                if (appData.installed) {
                     hasInstalled = true;
                 }
             }
@@ -300,37 +444,10 @@ Evme.Utils = new function Evme_Utils() {
             if (hasInstalled) {
                 options.obj && options.obj.hasInstalled(true);
             }
-            
+
             elList.appendChild(docFrag);
 
-            if (doLater.length > 0) {
-                timeoutAppsToDrawLater = window.setTimeout(function onTimeout(){
-                    var docFrag = document.createDocumentFragment();
-                    for (var i=0; i<doLater.length; i++) {
-                        var elApp = doLater[i].draw();
-                        docFrag.appendChild(elApp);
-                    }
-                    elList.appendChild(docFrag);
-                    
-                    window.setTimeout(function onTimeout(){
-                        Evme.$(".new", elList, function onItem(el) {
-                            el.classList.remove("new");
-                        });
-                    }, 10);
-
-                    onDone && onDone(appsList);
-                }, TIMEOUT_BEFORE_DRAWING_REST_OF_APPS);
-            } else {
-                onDone && onDone(appsList);
-            }
-
-            if (docFrag.childNodes.length > 0) {
-                window.setTimeout(function onTimeout(){
-                    Evme.$(".new", elList, function onItem(el) {
-                        el.classList.remove("new");
-                    });
-                }, 10);
-            }
+            onDone && onDone(appsList);
 
             return iconsResult;
         }
@@ -546,4 +663,9 @@ Evme.$create = function Evme_$create(tagName, attributes, html) {
     }
     
     return el;
+};
+
+Evme.htmlRegex = /</g;
+Evme.html = function Evme_html(html) {
+  return (html || '').replace(Evme.htmlRegex, '&lt;');
 };

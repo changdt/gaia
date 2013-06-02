@@ -8,11 +8,13 @@
     "url": "https://github.com/mozilla-b2g/gaia"
   },
   "permissions": {
+    "storage":{},
     "mobileconnection":{},
     "bluetooth":{},
     "device-storage:pictures":{ "access": "readonly" },
     "device-storage:music":{ "access": "readonly" },
     "device-storage:videos":{ "access": "readonly" },
+    "device-storage:sdcard":{ "access": "readonly" },
     "device-storage:apps":{ "access": "readonly" },
     "webapps-manage":{},
     "permissions":{},
@@ -22,7 +24,9 @@
     "time":{},
     "desktop-notification":{},
     "power":{},
-    "telephony":{}
+    "idle":{},
+    "telephony":{},
+    "audio-channel-notification":{}
   },
   "activities": {
     "configure": {
@@ -63,8 +67,9 @@
   },
   "default_locale": "en-US",
   "icons": {
+    "60": "/style/icons/60/Settings.png",
     "120": "/style/icons/Settings.png",
-    "60": "/style/icons/60/Settings.png"
+    "320": "/style/icons/320/Settings.png"
   },
   "orientation": "portrait-primary"
 }

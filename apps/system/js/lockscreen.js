@@ -5,6 +5,11 @@
 
 var LockScreen = {
   /*
+  * Boolean return true when initialized.
+  */
+  ready: false,
+
+  /*
   * Boolean return the status of the lock screen.
   * Must not multate directly - use unlock()/lockIfEnabled()
   * Listen to 'lock' and 'unlock' event to properly handle status changes
@@ -59,6 +64,11 @@ var LockScreen = {
   */
   passCodeEntered: '',
 
+  /**
+   * Are we currently switching panels ?
+   */
+  _switchingPanel: false,
+
   /*
   * Timeout after incorrect attempt
   */
@@ -75,9 +85,15 @@ var LockScreen = {
   triggeredTimeoutId: 0,
 
   /*
-  * Interval ID for elastic of curve and arrow
+  * Interval ID for elastic of curve and arrow (null means the animation is
+  * not running).
   */
-  elasticIntervalId: 0,
+  elasticIntervalId: null,
+
+  /*
+  * True if the animation should be running right now.
+  */
+  elasticEnabled: false,
 
   /*
   * elastic animation interval
@@ -94,8 +110,20 @@ var LockScreen = {
   */
   HANDLE_MAX: 70,
 
+  /**
+   * Object used for handling the clock UI element, wraps all related timers
+   */
+  clock: new Clock(),
+
   /* init */
   init: function ls_init() {
+    if (this.ready) { // already initialized: just trigger a translation
+      this.refreshClock(new Date());
+      this.updateConnState();
+      return;
+    }
+    this.ready = true;
+
     this.getAllElements();
 
     this.lockIfEnabled(true);
@@ -104,11 +132,12 @@ var LockScreen = {
     /* Status changes */
     window.addEventListener('volumechange', this);
     window.addEventListener('screenchange', this);
+    document.addEventListener('visibilitychange', this);
 
     /* Gesture */
     this.area.addEventListener('mousedown', this);
-    this.areaCamera.addEventListener('click', this);
-    this.areaUnlock.addEventListener('click', this);
+    this.areaCamera.addEventListener('mousedown', this);
+    this.areaUnlock.addEventListener('mousedown', this);
     this.iconContainer.addEventListener('mousedown', this);
 
     /* Unlock & camera panel clean up */
@@ -132,8 +161,9 @@ var LockScreen = {
       this.updateConnState();
       this.connstate.hidden = false;
     }
+
+    var self = this;
     if (navigator && navigator.mozCellBroadcast) {
-      var self = this;
       navigator.mozCellBroadcast.onreceived = function onReceived(event) {
         var msg = event.message;
         if (conn &&
@@ -145,13 +175,12 @@ var LockScreen = {
       };
     }
 
-    var self = this;
     SettingsListener.observe('lockscreen.enabled', true, function(value) {
       self.setEnabled(value);
     });
 
-    SettingsListener.observe('ring.enabled', true, function(value) {
-      self.mute.hidden = value;
+    SettingsListener.observe('audio.volume.notification', 7, function(value) {
+      self.mute.hidden = (value != 0);
     });
 
     SettingsListener.observe('vibration.enabled', true, function(value) {
@@ -245,6 +274,8 @@ var LockScreen = {
           if (this.camera.firstElementChild)
             this.camera.removeChild(this.camera.firstElementChild);
 
+          // Stop refreshing the clock when the screen is turned off.
+          this.clock.stop();
         } else {
           var _screenOffInterval = new Date().getTime() - this._screenOffTime;
           if (_screenOffInterval > this.passCodeRequestTimeout * 1000) {
@@ -252,21 +283,29 @@ var LockScreen = {
           } else {
             this._passCodeTimeoutCheck = false;
           }
+
+          // Resume refreshing the clock when the screen is turned on.
+          this.clock.start(this.refreshClock.bind(this));
+
+          // Show the unlock keypad immediately
+          if (this.passCodeEnabled) {
+            this.switchPanel('passcode');
+          }
         }
 
         this.lockIfEnabled(true);
         break;
+
+      case 'visibilitychange':
+        this.visibilityChanged();
+        break;
+
       case 'voicechange':
       case 'cardstatechange':
       case 'iccinfochange':
         this.updateConnState();
 
       case 'click':
-        if (evt.target === this.areaUnlock || evt.target === this.areaCamera) {
-          this.handleIconClick(evt.target);
-          break;
-        }
-
         if (!evt.target.dataset.key)
           break;
 
@@ -276,6 +315,13 @@ var LockScreen = {
         break;
 
       case 'mousedown':
+        if (evt.target === this.areaUnlock ||
+           evt.target === this.areaCamera) {
+          evt.preventDefault();
+          this.handleIconClick(evt.target);
+          break;
+        }
+
         var leftTarget = this.areaCamera;
         var rightTarget = this.areaUnlock;
         var handle = this.areaHandle;
@@ -341,7 +387,11 @@ var LockScreen = {
 
       case 'home':
         if (this.locked) {
-          this.switchPanel();
+          if (this.passCodeEnabled) {
+            this.switchPanel('passcode');
+          } else {
+            this.switchPanel();
+          }
           evt.stopImmediatePropagation();
         }
         break;
@@ -422,13 +472,15 @@ var LockScreen = {
     switch (target) {
       case this.areaCamera:
         var panelOrFullApp = function panelOrFullApp() {
-          if (self.passCodeEnabled) {
+          // If the passcode is enabled and it has a timeout which has passed
+          // switch to secure camera
+          if (self.passCodeEnabled && self._passCodeTimeoutCheck) {
             // Go to secure camera panel
             self.switchPanel('camera');
             return;
           }
 
-          self.unlock();
+          self.unlock(/* instant */ null, /* detail */ { areaCamera: true });
 
           var a = new MozActivity({
             name: 'record',
@@ -490,6 +542,11 @@ var LockScreen = {
   },
 
   lockIfEnabled: function ls_lockIfEnabled(instant) {
+    if (FtuLauncher && FtuLauncher.isFtuRunning()) {
+      this.unlock(instant);
+      return;
+    }
+
     if (this.enabled) {
       this.lock(instant);
     } else {
@@ -497,44 +554,74 @@ var LockScreen = {
     }
   },
 
-  unlock: function ls_unlock(instant) {
+  unlock: function ls_unlock(instant, detail) {
+    // This file is loaded before the Window Manager in order to intercept
+    // hardware buttons events. As a result WindowManager is not defined when
+    // the device is turned on and this file is loaded.
+    var currentApp =
+      'WindowManager' in window ? WindowManager.getDisplayedApp() : null;
+
+    var currentFrame = null;
+
+    if (currentApp) {
+      currentFrame = WindowManager.getAppFrame(currentApp).firstChild;
+      WindowManager.setOrientationForApp(currentApp);
+    }
+
     var wasAlreadyUnlocked = !this.locked;
     this.locked = false;
-    this.setElasticEnabled(false);
 
-    this.mainScreen.focus();
-    if (instant) {
-      this.overlay.classList.add('no-transition');
-      this.switchPanel();
-    } else {
-      this.overlay.classList.remove('no-transition');
-    }
+    var repaintTimeout = 0;
+    var nextPaint = (function() {
+      clearTimeout(repaintTimeout);
 
-    this.mainScreen.classList.remove('locked');
+      if (currentFrame)
+        currentFrame.removeNextPaintListener(nextPaint);
 
-    WindowManager.setOrientationForApp(WindowManager.getDisplayedApp());
 
-    if (!wasAlreadyUnlocked) {
-      // Any changes made to this,
-      // also need to be reflected in apps/system/js/storage.js
-      this.dispatchEvent('unlock');
-      this.writeSetting(false);
-
-      if (instant)
-        return;
-
-      if (this.unlockSoundEnabled) {
-        var unlockAudio = new Audio('./resources/sounds/unlock.ogg');
-        unlockAudio.play();
+      if (instant) {
+        this.overlay.classList.add('no-transition');
+        this.switchPanel();
+      } else {
+        this.overlay.classList.remove('no-transition');
       }
-    }
+
+      this.mainScreen.classList.remove('locked');
+
+      if (!wasAlreadyUnlocked) {
+        // Any changes made to this,
+        // also need to be reflected in apps/system/js/storage.js
+        this.dispatchEvent('unlock', detail);
+        this.writeSetting(false);
+
+        if (instant)
+          return;
+
+        if (this.unlockSoundEnabled) {
+          var unlockAudio = new Audio('./resources/sounds/unlock.ogg');
+          unlockAudio.play();
+        }
+      }
+    }).bind(this);
+
+    if (currentFrame)
+      currentFrame.addNextPaintListener(nextPaint);
+
+    repaintTimeout = setTimeout(function ensureUnlock() {
+      nextPaint();
+    }, 200);
+
+    this.setElasticEnabled(false);
+    this.mainScreen.focus();
+    this.dispatchEvent('will-unlock');
+
+    // The lockscreen will be hidden, stop refreshing the clock.
+    this.clock.stop();
   },
 
   lock: function ls_lock(instant) {
     var wasAlreadyLocked = this.locked;
     this.locked = true;
-
-    this.updateTime();
 
     this.switchPanel();
 
@@ -562,11 +649,12 @@ var LockScreen = {
   },
 
   loadPanel: function ls_loadPanel(panel, callback) {
+    this._loadingPanel = true;
     switch (panel) {
       case 'passcode':
       case 'main':
         if (callback)
-          callback();
+          setTimeout(callback);
         break;
 
       case 'emergency-call':
@@ -590,12 +678,12 @@ var LockScreen = {
         var mainScreen = this.mainScreen;
         frame.onload = function cameraLoaded() {
           mainScreen.classList.add('lockscreen-camera');
+          if (callback)
+            callback();
         };
         this.overlay.classList.remove('no-transition');
         this.camera.appendChild(frame);
 
-        if (callback)
-          callback();
         break;
     }
   },
@@ -665,44 +753,49 @@ var LockScreen = {
     }
 
     if (callback)
-      callback();
+      setTimeout(callback);
   },
 
   switchPanel: function ls_switchPanel(panel) {
-    var overlay = this.overlay;
-    var self = this;
-    panel = panel || 'main';
+    if (this._switchingPanel) {
+      return;
+    }
 
+    panel = panel || 'main';
+    var overlay = this.overlay;
+    var currentPanel = overlay.dataset.panel;
+
+    if (currentPanel && currentPanel === panel) {
+      return;
+    }
+
+    var self = this;
+
+    this._switchingPanel = true;
     this.loadPanel(panel, function panelLoaded() {
       self.unloadPanel(overlay.dataset.panel, panel,
         function panelUnloaded() {
-          if (overlay.dataset.panel !== panel)
-            self.dispatchEvent('lockpanelchange');
+          self.dispatchEvent('lockpanelchange', { 'panel': panel });
 
           overlay.dataset.panel = panel;
+          self._switchingPanel = false;
         });
     });
   },
 
-  updateTime: function ls_updateTime() {
+  refreshClock: function ls_refreshClock(now) {
     if (!this.locked)
       return;
 
-    var d = new Date();
     var f = new navigator.mozL10n.DateTimeFormat();
     var _ = navigator.mozL10n.get;
 
-    var timeFormat = _('shortTimeFormat') || '%H:%M';
-    var dateFormat = _('longDateFormat') || '%A %e %B';
-    var time = f.localeFormat(d, timeFormat);
+    var timeFormat = _('shortTimeFormat');
+    var dateFormat = _('longDateFormat');
+    var time = f.localeFormat(now, timeFormat);
     this.clockNumbers.textContent = time.match(/([012]?\d).[0-5]\d/g);
     this.clockMeridiem.textContent = (time.match(/AM|PM/i) || []).join('');
-    this.date.textContent = f.localeFormat(d, dateFormat);
-
-    var self = this;
-    window.setTimeout(function ls_clockTimeout() {
-      self.updateTime();
-    }, (59 - d.getSeconds()) * 1000);
+    this.date.textContent = f.localeFormat(now, dateFormat);
   },
 
   updateConnState: function ls_updateConnState() {
@@ -710,98 +803,118 @@ var LockScreen = {
     if (!conn)
       return;
 
-    var voice = conn.voice;
-    var iccInfo = conn.iccInfo;
-    var connstateLine1 = this.connstate.firstElementChild;
-    var connstateLine2 = this.connstate.lastElementChild;
-    var _ = navigator.mozL10n.get;
+    navigator.mozL10n.ready(function() {
+      var connstateLine1 = this.connstate.firstElementChild;
+      var connstateLine2 = this.connstate.lastElementChild;
+      var _ = navigator.mozL10n.get;
 
-    // Reset line 2
-    connstateLine2.textContent = '';
+      var updateConnstateLine1 = function updateConnstateLine1(l10nId) {
+        connstateLine1.dataset.l10nId = l10nId;
+        connstateLine1.textContent = _(l10nId) || '';
+      };
 
-    var updateConnstateLine1 = function updateConnstateLine1(l10nId) {
-      connstateLine1.dataset.l10nId = l10nId;
-      connstateLine1.textContent = _(l10nId) || '';
-    };
+      var self = this;
+      var updateConnstateLine2 = function updateConnstateLine2(l10nId) {
+        if (l10nId) {
+          self.connstate.classList.add('twolines');
+          connstateLine2.dataset.l10nId = l10nId;
+          connstateLine2.textContent = _(l10nId) || '';
+        } else {
+          self.connstate.classList.remove('twolines');
+          delete(connstateLine2.dataset.l10nId);
+          connstateLine2.textContent = '';
+        }
+      };
 
-    if (this.airplaneMode) {
-      updateConnstateLine1('airplaneMode');
-      return;
-    }
+      // Reset line 2
+      updateConnstateLine2();
 
-    // Possible value of voice.state are
-    // 'notSearching', 'searching', 'denied', 'registered',
-    // where the later three means the phone is trying to grabbing
-    // the network. See
-    // https://bugzilla.mozilla.org/show_bug.cgi?id=777057
-    if (voice.state == 'notSearching') {
-      // "No Network"
-      updateConnstateLine1('noNetwork');
-
-      return;
-    }
-
-    if (!voice.connected && !voice.emergencyCallsOnly) {
-      // "Searching"
-      // voice.state can be any of the later three value.
-      // (it's possible, briefly that the phone is 'registered'
-      // but not yet connected.)
-      updateConnstateLine1('searching');
-
-      return;
-    }
-
-    if (voice.emergencyCallsOnly) {
-      switch (conn.cardState) {
-        case 'absent':
-          updateConnstateLine1('emergencyCallsOnlyNoSIM');
-
-          break;
-
-        case 'pinRequired':
-          updateConnstateLine1('emergencyCallsOnlyPinRequired');
-
-          break;
-
-        case 'pukRequired':
-          updateConnstateLine1('emergencyCallsOnlyPukRequired');
-
-          break;
-
-        case 'networkLocked':
-          updateConnstateLine1('emergencyCallsOnlyNetworkLocked');
-
-          break;
-
-        default:
-          updateConnstateLine1('emergencyCallsOnly');
-
-          break;
+      if (this.airplaneMode) {
+        updateConnstateLine1('airplaneMode');
+        return;
       }
 
-      return;
-    }
-    var operatorInfos = MobileOperator.userFacingInfo(conn);
-    if (this.cellbroadcastLabel) {
-      connstateLine2.textContent = this.cellbroadcastLabel;
-    } else if (operatorInfos.carrier) {
-      connstateLine2.textContent = operatorInfos.carrier + ' ' +
-        operatorInfos.region;
-    }
+      var voice = conn.voice;
 
-    var operator = operatorInfos.operator;
+      // Possible value of voice.state are:
+      // 'notSearching', 'searching', 'denied', 'registered',
+      // where the latter three mean the phone is trying to grab the network.
+      // See https://bugzilla.mozilla.org/show_bug.cgi?id=777057
+      if ('state' in voice && voice.state == 'notSearching') {
+        updateConnstateLine1('noNetwork');
+        return;
+      }
 
-    if (voice.roaming) {
-      var l10nArgs = { operator: operator };
-      connstateLine1.dataset.l10nId = 'roaming';
-      connstateLine1.dataset.l10nArgs = JSON.stringify(l10nArgs);
-      connstateLine1.textContent = _('roaming', l10nArgs);
+      if (!voice.connected && !voice.emergencyCallsOnly) {
+        // "Searching"
+        // voice.state can be any of the latter three values.
+        // (it's possible that the phone is briefly 'registered'
+        // but not yet connected.)
+        updateConnstateLine1('searching');
+        return;
+      }
 
-      return;
-    }
+      if (voice.emergencyCallsOnly) {
+        updateConnstateLine1('emergencyCallsOnly');
 
-    delete connstateLine1.dataset.l10nId;
-    connstateLine1.textContent = operator;
+        switch (conn.cardState) {
+          case 'unknown':
+            updateConnstateLine2('emergencyCallsOnly-unknownSIMState');
+            break;
+
+          case 'absent':
+            updateConnstateLine2('emergencyCallsOnly-noSIM');
+            break;
+
+          case 'pinRequired':
+            updateConnstateLine2('emergencyCallsOnly-pinRequired');
+            break;
+
+          case 'pukRequired':
+            updateConnstateLine2('emergencyCallsOnly-pukRequired');
+            break;
+
+          case 'networkLocked':
+            updateConnstateLine2('emergencyCallsOnly-networkLocked');
+            break;
+
+          case 'serviceProviderLocked':
+            updateConnstateLine2('emergencyCallsOnly-serviceProviderLocked');
+            break;
+
+          case 'corporateLocked':
+            updateConnstateLine2('emergencyCallsOnly-corporateLocked');
+            break;
+
+          default:
+            updateConnstateLine2();
+            break;
+        }
+        return;
+      }
+
+      var operatorInfos = MobileOperator.userFacingInfo(conn);
+      if (this.cellbroadcastLabel) {
+        connstateLine2.textContent = this.cellbroadcastLabel;
+      } else if (operatorInfos.carrier) {
+        connstateLine2.textContent = operatorInfos.carrier + ' ' +
+          operatorInfos.region;
+      }
+
+      var operator = operatorInfos.operator;
+
+      if (voice.roaming) {
+        var l10nArgs = { operator: operator };
+        connstateLine1.dataset.l10nId = 'roaming';
+        connstateLine1.dataset.l10nArgs = JSON.stringify(l10nArgs);
+        connstateLine1.textContent = _('roaming', l10nArgs);
+
+        return;
+      }
+
+      delete connstateLine1.dataset.l10nId;
+      connstateLine1.textContent = operator;
+    }.bind(this));
   },
 
   updatePassCodeUI: function lockscreen_updatePassCodeUI() {
@@ -826,10 +939,15 @@ var LockScreen = {
 
   checkPassCode: function lockscreen_checkPassCode() {
     if (this.passCodeEntered === this.passCode) {
+      var self = this;
       this.overlay.dataset.passcodeStatus = 'success';
       this.passCodeError = 0;
 
-      this.unlock();
+      var transitionend = function() {
+        self.passcodeCode.removeEventListener('transitionend', transitionend);
+        self.unlock();
+      };
+      this.passcodeCode.addEventListener('transitionend', transitionend);
     } else {
       this.overlay.dataset.passcodeStatus = 'error';
       if ('vibrate' in navigator)
@@ -856,7 +974,7 @@ var LockScreen = {
     // ID of elements to create references
     var elements = ['connstate', 'mute', 'clock-numbers', 'clock-meridiem',
         'date', 'area', 'area-unlock', 'area-camera', 'icon-container',
-        'area-handle', 'passcode-code',
+        'area-handle', 'passcode-code', 'alt-camera', 'alt-camera-button',
         'passcode-pad', 'camera', 'accessibility-camera',
         'accessibility-unlock', 'panel-emergency-call'];
 
@@ -874,9 +992,15 @@ var LockScreen = {
     this.mainScreen = document.getElementById('screen');
   },
 
-  dispatchEvent: function ls_dispatchEvent(name) {
+  dispatchEvent: function ls_dispatchEvent(name, detail) {
     var evt = document.createEvent('CustomEvent');
-    evt.initCustomEvent(name, true, true, null);
+    var evt = new CustomEvent(name, {
+      'bubbles': true,
+      'cancelable': true,
+      // Set event detail if needed for the specific event 'name' (relevant for
+      // passing which button triggered the event)
+      'detail': detail
+    });
     window.dispatchEvent(evt);
   },
 
@@ -889,12 +1013,37 @@ var LockScreen = {
     });
   },
 
-  setElasticEnabled: function ls_setElasticEnabled(value) {
-    clearInterval(this.elasticIntervalId);
-    if (value) {
-      this.elasticIntervalId =
-        setInterval(this.playElastic.bind(this), this.ELASTIC_INTERVAL);
+  stopElasticTimer: function ls_stopElasticTimer() {
+    // Stop the timer if its running.
+    if (this.elasticIntervalId != null) {
+      clearInterval(this.elasticIntervalId);
+      this.elasticIntervalId = null;
     }
+  },
+
+  startElasticTimer: function ls_startElasticTimer() {
+    this.elasticIntervalId =
+      setInterval(this.playElastic.bind(this), this.ELASTIC_INTERVAL);
+  },
+
+  setElasticEnabled: function ls_setElasticEnabled(value) {
+    // Remember the state we want to be in.
+    this.elasticEnabled = value;
+    // If the timer is already running, stop it.
+    this.stopElasticTimer();
+    // If the document is visible, go ahead and start the timer now.
+    if (value && !document.hidden) {
+      this.startElasticTimer();
+    }
+  },
+
+  visibilityChanged: function ls_visibilityChanged() {
+    // Stop the timer when we go invisible and
+    // re-start it when we become visible.
+    if (document.hidden)
+      this.stopElasticTimer();
+    else if (this.elasticEnabled)
+      this.startElasticTimer();
   },
 
   playElastic: function ls_playElastic() {
@@ -912,10 +1061,9 @@ var LockScreen = {
   }
 };
 
-if (navigator.mozL10n.readyState == 'complete' ||
-    navigator.mozL10n.readyState == 'interactive') {
-  LockScreen.init();
-} else {
-  window.addEventListener('localized', LockScreen.init.bind(LockScreen));
-}
+// Bug 836195 - [Homescreen] Dock icons drop down in the UI
+// consistently when using a lockcode and visiting camera
+LockScreen.init();
+
+navigator.mozL10n.ready(LockScreen.init.bind(LockScreen));
 

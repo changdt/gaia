@@ -58,16 +58,15 @@ Calendar.ns('Provider').CaldavPullEvents = (function() {
     }
 
     stream.on('event', this);
+    stream.on('component', this);
     stream.on('occurrence', this);
-    stream.on('recurring end', this);
-    stream.on('missing events', this);
+    stream.on('missingEvents', this);
 
     this.icalQueue = [];
     this.eventQueue = [];
     this.busytimeQueue = [];
     this.alarmQueue = [];
 
-    this.syncStart = new Date();
     this._busytimeStore = this.app.store('Busytime');
   }
 
@@ -175,15 +174,43 @@ Calendar.ns('Provider').CaldavPullEvents = (function() {
         if (alarms.length) {
           var i = 0;
           var len = alarms.length;
+          var now = Date.now();
 
           for (; i < len; i++) {
-            this.alarmQueue.push(alarms[i]);
+            var alarm = {
+              startDate: {},
+              eventId: item.eventId,
+              busytimeId: item._id
+            };
+
+            // Copy the start object
+            for (var j in item.start) {
+              alarm.startDate[j] = item.start[j];
+            }
+            alarm.startDate.utc += (alarms[i].trigger * 1000);
+
+            var alarmDate = Calc.dateFromTransport(item.end);
+            if (alarmDate.valueOf() < now) {
+              continue;
+            }
+            this.alarmQueue.push(alarm);
           }
         }
       }
 
       this.app.timeController.cacheBusytime(item);
       this.busytimeQueue.push(item);
+    },
+
+    handleComponentSync: function(component) {
+      component.eventId = this.eventIdFromRemote(component);
+      component.calendarId = this.calendar._id;
+
+      if (!component.lastRecurrenceId) {
+        delete component.lastRecurrenceId;
+      }
+
+      this.icalQueue.push(component);
     },
 
     handleEventSync: function(event) {
@@ -225,12 +252,15 @@ Calendar.ns('Provider').CaldavPullEvents = (function() {
       var data = event.data;
 
       switch (event.type) {
-        case 'missing events':
+        case 'missingEvents':
           this.removeList = data[0];
           break;
         case 'occurrence':
           var occur = this.formatBusytime(data[0]);
           this.handleOccurrenceSync(occur);
+          break;
+        case 'component':
+          this.handleComponentSync(data[0]);
           break;
         case 'event':
           var event = this.formatEvent(data[0]);
@@ -239,7 +269,14 @@ Calendar.ns('Provider').CaldavPullEvents = (function() {
       }
     },
 
-    commit: function(callback) {
+    /**
+     * Commit all pending records.
+     *
+     *
+     * @param {IDBTransaction} [trans] optional transaction.
+     * @param {Function} callback fired when transaction completes.
+     */
+    commit: function(trans, callback) {
       var eventStore = this.app.store('Event');
       var icalComponentStore = this.app.store('IcalComponent');
       var calendarStore = this.app.store('Calendar');
@@ -249,10 +286,13 @@ Calendar.ns('Provider').CaldavPullEvents = (function() {
       var calendar = this.calendar;
       var account = this.account;
 
-      var trans = calendarStore.db.transaction(
-        ['calendars', 'events', 'busytimes', 'alarms', 'icalComponents'],
-        'readwrite'
-      );
+      if (typeof(trans) === 'function') {
+        callback = trans;
+        trans = calendarStore.db.transaction(
+          ['calendars', 'events', 'busytimes', 'alarms', 'icalComponents'],
+          'readwrite'
+        );
+      }
 
       var self = this;
 
@@ -282,22 +322,17 @@ Calendar.ns('Provider').CaldavPullEvents = (function() {
         });
       }
 
-      calendar.lastEventSyncToken = calendar.remote.syncToken;
-      calendar.lastEventSyncDate = this.syncStart;
+      if (callback) {
+        trans.addEventListener('error', function(e) {
+          callback(e);
+        });
 
-      if (!calendar.firstEventSyncDate) {
-        calendar.firstEventSyncDate = this.syncStart;
+        trans.addEventListener('complete', function() {
+          callback(null);
+        });
       }
 
-      calendarStore.persist(calendar, trans);
-
-      trans.addEventListener('error', function(e) {
-        callback(e);
-      });
-
-      trans.addEventListener('complete', function() {
-        callback(null);
-      });
+      return trans;
     }
 
   };

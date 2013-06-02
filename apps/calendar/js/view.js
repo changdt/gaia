@@ -1,4 +1,6 @@
 (function(window) {
+  var DEFAULT_ERROR_ID = 'error-default';
+
   /**
    * Very simple base class for views.
    * Provides functionality for active/inactive.
@@ -57,6 +59,23 @@
       return this._findElement('errors');
     },
 
+    /**
+     * Creates a string id for a given model.
+     *
+     *    view.idForModel('foo-', { _id: 1 }); // => foo-1
+     *    view.idForModel('foo-', '2'); // => foo-2
+     *
+     * @param {String} prefix of string.
+     * @param {Object|String|Numeric} objectOrString representation of model.
+     */
+    idForModel: function(prefix, objectOrString) {
+      prefix += (typeof(objectOrString) === 'object') ?
+        objectOrString._id :
+        objectOrString;
+
+      return prefix;
+    },
+
     calendarId: function(input) {
       if (typeof(input) !== 'string') {
         input = input.calendarId;
@@ -84,7 +103,7 @@
         var context = handler;
         handler = function() {
           context.handleEvent.apply(context, arguments);
-        }
+        };
       }
 
       element.addEventListener(type, function(e) {
@@ -121,7 +140,14 @@
      * @param {String} selector name as defined in selectors.
      * @param {Boolean} all true when to find all elements. (default false).
      */
-    _findElement: function(name, all) {
+    _findElement: function(name, all, element) {
+      if (typeof(all) === 'object') {
+        element = all;
+        all = false;
+      }
+
+      element = element || document;
+
       var cacheName;
       var selector;
 
@@ -135,9 +161,9 @@
 
         if (!this[cacheName]) {
           if (all) {
-            this[cacheName] = document.querySelectorAll(selector);
+            this[cacheName] = element.querySelectorAll(selector);
           } else {
-            this[cacheName] = document.querySelector(selector);
+            this[cacheName] = element.querySelector(selector);
           }
         }
 
@@ -167,8 +193,8 @@
       var len = list.length;
 
       for (; i < len; i++) {
-        var name = list[i].name;
-        errors += _('error-' + name) || name;
+        var name = list[i].l10nID || list[i].name;
+        errors += _('error-' + name) || _(DEFAULT_ERROR_ID);
       }
 
       // populate error and display it.

@@ -2,9 +2,29 @@
 
   var Day = Calendar.Template.create({
     hour: function() {
-      return '<section class="hour hour-' + this.h('hour') + ' ' + this.h('classes') + ' calendar-display">' +
+      var hour = this.h('hour');
+      var l10n = '';
+      var displayHour;
+
+      if (hour === Calendar.Calc.ALLDAY) {
+        l10n = ' data-l10n-id="hour-allday" ';
+        displayHour = navigator.mozL10n.get('hour-allday');
+      } else {
+        displayHour = this.h('displayHour');
+      }
+
+      var classes = [
+        'hour',
+        'hour-' + hour,
+        this.h('classes'),
+        'calendar-display'
+      ].join(' ');
+
+      return '<section class="' + classes + '" data-hour="' + hour + '">' +
           '<h4>' +
-            '<span class="display-hour ' + this.h('hour') + '">' + this.h('displayHour') + '</span>' +
+            '<span ' + l10n + 'class="display-hour ' + hour + '">' +
+              displayHour +
+            '</span>' +
           '</h4>' +
           /** has no semantic value - re-evaluate */
           '<div class="events">' + this.s('items') + '</div>' +
@@ -16,9 +36,12 @@
     },
 
     event: function() {
-      return '<section class="event calendar-id-' + this.h('calendarId') + ' ' +
-             'calendar-display" data-id="' + this.h('busytimeId') + '">' +
-          '<div class="container calendar-id-' + this.h('calendarId') + ' calendar-color">' +
+      var calendarId = this.h('calendarId');
+      return '<section class="event calendar-id-' + calendarId + ' ' +
+        this.h('classes') + ' calendar-display" ' +
+        'data-id="' + this.h('busytimeId') + '">' +
+          '<div class="container calendar-id-' + calendarId +
+              ' calendar-color">' +
             '<h5>' + this.h('title') + '</h5>' +
             '<span class="details">' +
               '<span class="location">' +

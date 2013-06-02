@@ -3,13 +3,21 @@
 
 'use strict';
 
-var Launcher = (function() {
+window.addEventListener('load', function onload_launcher_init() {
+  window.removeEventListener('load', onload_launcher_init);
+
   function log(str) {
     dump(' -+- Launcher -+-: ' + str + '\n');
   }
 
   function currentAppFrame() {
     return WindowManager.getAppFrame(WindowManager.getDisplayedApp());
+  }
+
+
+  function currentAppIframe() {
+    var frame = currentAppFrame();
+    return frame ? frame.firstChild : null;
   }
 
   var _ = navigator.mozL10n.get;
@@ -77,46 +85,52 @@ var Launcher = (function() {
   var reload = document.getElementById('reload-button');
   reload.addEventListener('click', function doReload(evt) {
     clearButtonBarTimeout();
-    currentAppFrame().reload(true);
+    currentAppIframe().reload(true);
   });
 
   var back = document.getElementById('back-button');
   back.addEventListener('click', function goBack() {
     clearButtonBarTimeout();
-    currentAppFrame().goBack();
+    currentAppIframe().goBack();
   });
 
   var forward = document.getElementById('forward-button');
   forward.addEventListener('click', function goForward() {
     clearButtonBarTimeout();
-    currentAppFrame().goForward();
+    currentAppIframe().goForward();
   });
 
   function onLocationChange() {
-    currentAppFrame().getCanGoForward().onsuccess = function forwardSuccess(e) {
-      if (e.target.result === true) {
-        delete forward.dataset.disabled;
-      } else {
-        forward.dataset.disabled = true;
-      }
-    }
+    currentAppIframe().getCanGoForward().onsuccess =
+      function forwardSuccess(e) {
+        if (e.target.result === true) {
+          delete forward.dataset.disabled;
+        } else {
+          forward.dataset.disabled = true;
+        }
+      };
 
-    currentAppFrame().getCanGoBack().onsuccess = function backSuccess(e) {
+    currentAppIframe().getCanGoBack().onsuccess = function backSuccess(e) {
       if (e.target.result === true) {
         delete back.dataset.disabled;
       } else {
         back.dataset.disabled = true;
       }
-    }
+    };
   }
 
-  window.addEventListener('mozbrowserlocationchange', onLocationChange);
+  window.addEventListener('mozbrowserlocationchange', function() {
+    var frame = currentAppFrame();
+    if (frame && 'wrapper' in frame.dataset) {
+      onLocationChange();
+    }
+  });
 
   var bookmarkButton = document.getElementById('bookmark-button');
   function onDisplayedApplicationChange() {
     toggleButtonBar(BUTTONBAR_INITIAL_OPEN_TIMEOUT);
 
-    var dataset = currentAppFrame().dataset;
+    var dataset = currentAppIframe().dataset;
     if (dataset.originURL || dataset.searchURL) {
       delete bookmarkButton.dataset.disabled;
       return;
@@ -130,7 +144,7 @@ var Launcher = (function() {
       return;
 
     clearButtonBarTimeout();
-    var dataset = currentAppFrame().dataset;
+    var dataset = currentAppIframe().dataset;
 
     function selected(value) {
       if (!value)
@@ -153,24 +167,26 @@ var Launcher = (function() {
           type: 'url',
           url: url,
           name: name,
-          icon: dataset.icon
+          icon: dataset.icon,
+          useAsyncPanZoom: dataset.useAsyncPanZoom,
+          iconable: false
         }
       });
 
       activity.onsuccess = function onsuccess() {
         if (value === 'origin') {
-          delete currentAppFrame().dataset.originURL;
+          delete currentAppIframe().dataset.originURL;
         }
 
         if (value === 'search') {
-          delete currentAppFrame().dataset.searchURL;
+          delete currentAppIframe().dataset.searchURL;
         }
 
-        if (!currentAppFrame().dataset.originURL &&
-          !currentAppFrame().dataset.searchURL) {
+        if (!currentAppIframe().dataset.originURL &&
+          !currentAppIframe().dataset.searchURL) {
           bookmarkButton.dataset.disabled = true;
         }
-      }
+      };
     }
 
     var data = {
@@ -188,4 +204,4 @@ var Launcher = (function() {
 
     ModalDialog.selectOne(data, selected);
   });
-}());
+});

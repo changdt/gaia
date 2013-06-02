@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 
 var contacts = window.contacts || {};
 
@@ -32,19 +32,47 @@ contacts.Search = (function() {
       HARD_LIMIT = 25,
       emptySearch = true,
       remainingPending = true,
-      imgLoader;
+      imgLoader,
+      searchEnabled = false;
 
-  var init = function load(_conctactsListView, _groupFavorites, _clickHandler) {
-    conctactsListView = _conctactsListView;
-
+  var onLoad = function onLoad() {
     searchView = document.getElementById('search-view');
-
-    favoriteGroup = _groupFavorites;
-    searchBox = document.getElementById('search-contact');
     searchList = document.getElementById('search-list');
+  };
+
+  onLoad();
+
+  var init = function load(_conctactsListView, _groupFavorites, _clickHandler,
+                           defaultEnabled) {
+    conctactsListView = _conctactsListView;
+    favoriteGroup = _groupFavorites;
+
     if (typeof _clickHandler === 'function') {
       searchList.addEventListener('click', _clickHandler);
     }
+
+    if (defaultEnabled)
+      searchEnabled = true;
+  };
+
+  var initialized = false;
+
+  var doInit = function doInit() {
+    if (initialized) {
+      return;
+    }
+
+    initialized = true;
+    searchBox = document.getElementById('search-contact');
+    var resetButton = searchBox.nextElementSibling;
+    resetButton.addEventListener('ontouchstart' in window ? 'touchstart' :
+                                 'mousedown', function() {
+      searchBox.value = '';
+      searchBox.focus();
+      resetState();
+      window.setTimeout(fillInitialSearchPage, 0);
+    });
+
     searchList.parentNode.addEventListener('touchstart', function() {
       blurList = true;
     });
@@ -60,7 +88,10 @@ contacts.Search = (function() {
     });
 
     imgLoader = new ImageLoader('#groups-list-search', 'li');
-  }
+    LazyLoader.load(['/contacts/js/fb_resolver.js'], function() {
+      imgLoader.setResolver(fb.resolver);
+    });
+  };
 
   //Search mode instructions
   var exitSearchMode = function exitSearchMode(evt) {
@@ -73,7 +104,6 @@ contacts.Search = (function() {
       searchBox.value = '';
       // Resetting state
       contactNodes = null;
-      searchList.innerHTML = '';
       searchTextCache = {};
       resetState();
 
@@ -91,12 +121,12 @@ contacts.Search = (function() {
     currentSet = {};
     // We don't know if the user will launch a new search later
     theClones = {};
-    searchList.innerHTML = '';
+    utils.dom.removeChildNodes(searchList);
     emptySearch = true;
     remainingPending = true;
   }
 
-  function addRemainingResults(nodes,from) {
+  function addRemainingResults(nodes, from) {
     if (remainingPending !== true) {
       return;
     }
@@ -196,12 +226,14 @@ contacts.Search = (function() {
     if (!inSearchMode) {
       window.addEventListener('input', onInput);
       searchView.classList.add('insearchmode');
+      doInit();
       fillInitialSearchPage();
       inSearchMode = true;
       emptySearch = true;
 
-      // And now that everything is ready let's paint the keyboard
-      searchBox.focus();
+      setTimeout(function nextTick() {
+        searchBox.focus();
+      });
     }
   };
 
@@ -221,7 +253,6 @@ contacts.Search = (function() {
       for (var c = from; c < end && c < contacts.length; c++) {
         var contact = contacts[c].node || contacts[c];
         var contactText = contacts[c].text || getSearchText(contacts[c]);
-
         if (!pattern.test(contactText)) {
           if (contact.dataset.uuid in currentSet) {
             searchList.removeChild(currentSet[contact.dataset.uuid]);
@@ -232,8 +263,8 @@ contacts.Search = (function() {
             hideProgressResults();
           }
           // Only an initial page of elements is loaded in the search list
-          if (Object.keys(currentSet).length
-             < SEARCH_PAGE_SIZE && !(contact.dataset.uuid in currentSet)) {
+          if (Object.keys(currentSet).length <
+              SEARCH_PAGE_SIZE && !(contact.dataset.uuid in currentSet)) {
             var clonedNode = getClone(contact);
             currentSet[contact.dataset.uuid] = clonedNode;
             searchList.appendChild(clonedNode);
@@ -279,10 +310,25 @@ contacts.Search = (function() {
     }
   }
 
+  var enableSearch = function enableSearch() {
+    if (searchEnabled) {
+      return;
+    }
+
+    searchEnabled = true;
+    // We perform the search when all the info have been loaded and the
+    // user wrote something in the entry field
+    if (searchBox.value.trim()) {
+      invalidateCache();
+      search();
+    }
+  };
+
   var search = function performSearch(searchDoneCb) {
     prevTextToSearch = currentTextToSearch;
 
     currentTextToSearch = utils.text.normalize(searchBox.value.trim());
+    currentTextToSearch = utils.text.escapeRegExp(currentTextToSearch);
     var thisSearchText = new String(currentTextToSearch);
 
     if (thisSearchText.length === 0) {
@@ -291,6 +337,10 @@ contacts.Search = (function() {
     }
     else {
       showProgress();
+      if (!searchEnabled) {
+        resetState();
+        return;
+      }
       emptySearch = false;
       // The remaining results have not been added yet
       remainingPending = true;
@@ -332,7 +382,7 @@ contacts.Search = (function() {
       contactNodes = list.querySelectorAll(CONTACTS_SELECTOR);
     }
     return contactNodes;
-  }
+  };
 
   var getContactsToSearch = function getContactsToSearch(newText, prevText) {
     var out;
@@ -340,18 +390,31 @@ contacts.Search = (function() {
         prevText.length > 0 && newText.indexOf(prevText) === 0) {
       out = searchableNodes || getContactsDom();
     } else {
-      searchList.innerHTML = '';
+      utils.dom.removeChildNodes(searchList);
       currentSet = {};
       out = getContactsDom();
       canReuseSearchables = false;
     }
 
     return out;
-  }
+  };
 
   var isInSearchMode = function isInSearchMode() {
     return inSearchMode;
-  }
+  };
+
+  var invalidateCache = function s_invalidate() {
+    canReuseSearchables = false;
+    searchableNodes = null;
+    contactNodes = null;
+    currentSet = {};
+    searchTextCache = {};
+  };
+
+  var removeContact = function s_removeContact(id) {
+    var contact = searchList.querySelector('li[data-uuid=\"' + id + '\"]');
+    searchList.removeChild(contact);
+  };
 
   function showProgress() {
     searchNoResult.classList.add('hide');
@@ -368,18 +431,16 @@ contacts.Search = (function() {
     searchProgress.classList.add('hidden');
   }
 
-  // When the cancel button inside the input is clicked
-  document.addEventListener('cancelInput', function() {
-    searchBox.focus();
-    resetState();
-    window.setTimeout(fillInitialSearchPage, 0);
-  });
-
   return {
     'init': init,
+    'invalidateCache': invalidateCache,
+    'removeContact': removeContact,
     'search': search,
     'enterSearchMode': enterSearchMode,
     'exitSearchMode': exitSearchMode,
-    'isInSearchMode': isInSearchMode
+    'isInSearchMode': isInSearchMode,
+    'enableSearch': enableSearch,
+    // The purpose of this method is only for unit tests
+    'load': onLoad
   };
 })();

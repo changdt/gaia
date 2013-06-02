@@ -15,6 +15,10 @@
     <script defer src="shared/js/async_storage.js"></script>
     <script defer src="shared/js/mobile_operator.js"></script>
     <script defer src="shared/js/manifest_helper.js"></script>
+    <script defer src="shared/js/mime_mapper.js"></script>
+
+    <!-- multi-resolution support -->
+    <link rel="stylesheet" href="/shared/style/responsive.css">
 
     <!-- Wrapper -->
     <link rel="stylesheet" type="text/css" href="style/wrapper/wrapper.css">
@@ -35,14 +39,16 @@
     <!-- Include shared resources
     <link rel="resource" type="application/json" href="shared/resources/apn.json"/>
     <link rel="resource" type="image/png" href="shared/resources/branding/initlogo.png"/>
-    <link rel="resource" type="image/png" href="shared/resources/branding/splash_screen_generic.png"/>
     -->
 
     <!-- applications.js must not be deferred
          in order to catch webapps-registry-ready mozChromeEvent -->
     <script src="js/applications.js"></script>
+    <!-- Not deferring the following to show startup logo/animation as soon as possible. -->
+    <script src="js/logo_loader.js"></script>
+    <script src="js/init_logo_handler.js"></script>
+
     <script defer src="js/screen_manager.js"></script>
-    <script defer src="js/background_service.js"></script>
     <script defer src="js/mouse2touch.js"></script>
     <script defer src="js/activities.js"></script>
     <script defer src="js/bootstrap.js"></script>
@@ -96,6 +102,9 @@
     <!-- Statusbar -->
     <link rel="stylesheet" type="text/css" href="style/statusbar/statusbar.css">
     <script defer src="js/statusbar.js"></script>
+
+    <!-- FTU launcher -->
+    <script defer src="js/ftu_launcher.js"></script>
 
     <!-- LockScreen -->
     <link rel="stylesheet" type="text/css" href="style/lockscreen/lockscreen.css">
@@ -201,32 +210,89 @@
     <link rel="stylesheet" type="text/css" href="style/crash_reporter/crash_reporter.css">
     <script defer src="js/crash_reporter.js"></script>
 
+    <!-- Browser class -->
+    <link rel="stylesheet" type="text/css" href="style/browser_frame/browser_frame.css">
+    <script defer src="js/browser_frame.js"></script>
+
+    <!-- Captive Portal Login -->
+    <script defer src="js/captive_portal.js"></script>
+
     <!-- Windows -->
     <!-- Any module that wants to intercept the Home button and prevent the -->
     <!-- homescreen from being displayed must come before this script. -->
+    <script defer src="js/window.js"></script>
     <script defer src="js/window_manager.js"></script>
+
+    <!-- Boot sound  -->
+    <script defer src="js/boot_sound.js"></script>
+
+    <!-- Entry Sheet -->
+    <link rel="stylesheet" type="text/css" href="style/entry_sheet/entry_sheet.css">
+    <script defer src="js/entry_sheet.js"></script>
+
+    <!-- Remote Debugger -->
+    <script defer src="js/remote_debugger.js"></script>
+
+    <!-- Call Forwarding  -->
+    <script defer src="js/call_forwarding.js"></script>
 
     <!-- z-indexes of all the overlays in the system -->
     <link rel="stylesheet" type="text/css" href="style/zindex.css">
 
+    <!-- Device storage watcher -->
+    <script defer src="js/storage_watcher.js"></script>
+    <link rel="stylesheet" type="text/css" href="style/storage_watcher/storage_watcher.css">
+
     <style>
-      /* initlogo style is here to prevent flashing */
-      #initlogo {
+      /* initlogos style is here to prevent flashing */
+
+      #os-logo {
         position: absolute;
         overflow: hidden;
         width: 100%;
         height: 100%;
-
-        background: #000 url('shared/resources/branding/initlogo.png') bottom right no-repeat;
-
+        background: #000 url('shared/resources/branding/initlogo.png') no-repeat center / cover;
         z-index: 65536;
-
         opacity: 1;
-        transition: opacity 1s ease 3s;
+        transition: opacity 1s ease 2s;
         pointer-events: none;
       }
 
-      #initlogo.hide {
+      #carrier-logo {
+        position: absolute;
+        overflow: hidden;
+        width: 100%;
+        height: 100%;
+        background: #000;
+      }
+
+      #carrier-logo > img,
+      #poweroff-splash > img {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        opacity: 1;
+        transition: opacity 1s ease 2s;
+      }
+
+      #carrier-logo > video,
+      #poweroff-splash > video {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        opacity: 1;
+        transition: opacity 1s ease;
+      }
+
+      #carrier-logo.transparent {
+        background: transparent;
+      }
+
+      #carrier-logo > img.hide,
+      #carrier-logo > video.hide,
+      #os-logo.hide,
+      #poweroff-splash > img.hide,
+      #poweroff-splash > video.hide {
         opacity: 0;
       }
     </style>
@@ -235,7 +301,9 @@
 
   <body role="application">
     <div id="screen" class="locked">
-      <div id="initlogo" data-z-index-level="initlogo"></div>
+      <div id="os-logo" data-z-index-level="initlogo">
+        <div id="carrier-logo"></div>
+      </div>
 
       <div id="statusbar" data-z-index-level="statusbar">
         <!-- Carrier & date label -->
@@ -257,11 +325,7 @@
         <div id="statusbar-flight-mode" class="sb-icon sb-icon-flight-mode" hidden></div>
         <div id="statusbar-signal" class="sb-icon sb-icon-signal"
           data-level="5" hidden></div>
-        <div id="statusbar-network-activity" class="sb-icon sb-icon-network-activity" hidden></div>
         <div id="statusbar-headphones" class="sb-icon sb-icon-headphones" hidden></div>
-        <div id="statusbar-system-downloads"
-             class="sb-icon sb-icon-system-downloads"
-             hidden></div>
 
         <!-- Permissions -->
         <div id="statusbar-tethering" class="sb-icon sb-icon-tethering" hidden></div>
@@ -273,6 +337,10 @@
         <div id="statusbar-geolocation" class="sb-icon sb-icon-geolocation" hidden></div>
         <div id="statusbar-usb" class="sb-icon sb-icon-usb" hidden></div>
         <div id="statusbar-call-forwarding" class="sb-icon sb-icon-call-forwarding" hidden></div>
+
+        <!-- Activity -->
+        <canvas id="statusbar-system-downloads" hidden></canvas>
+        <canvas id="statusbar-network-activity" hidden></canvas>
       </div>
 
       <div id="utility-tray" data-z-index-level="utility-tray">
@@ -284,12 +352,21 @@
 
         <div id="notifications-container">
           <!-- Update Manager -->
-          <div id="update-manager-container" class='fake-notification'>
+          <div id="update-manager-container" class="fake-notification">
             <div class="icon">
             </div>
             <div class="activity">
             </div>
             <div class="message">
+            </div>
+          </div>
+          <!-- Storage watcher notification -->
+          <div id="storage-watcher-container" class="fake-notification">
+            <div class="icon">
+            </div>
+            <div class="message">
+            </div>
+            <div class="available-space">
             </div>
           </div>
           <!-- App Install Manager -->
@@ -309,9 +386,13 @@
         <!-- quick settings -->
         <div id="quick-settings">
           <a href="#" id="quick-settings-wifi" data-enabled="false"></a>
+          <div class="separator"></div>
           <a href="#" id="quick-settings-data" data-enabled="false"></a>
+          <div class="separator"></div>
           <a href="#" id="quick-settings-bluetooth" data-enabled="false"></a>
-          <a href="#" id="quick-settings-power-save" data-enabled="false"></a>
+          <div class="separator"></div>
+          <a href="#" id="quick-settings-airplane-mode" data-enabled="false"></a>
+          <div class="separator"></div>
           <a href="#" id="quick-settings-full-app" data-enabled="false"></a>
         </div>
 
@@ -353,21 +434,29 @@
                 <div id="messageHeader">The PIN was incorrect.</div>
                 <span id="messageBody">3 tries left.</span>
               </div>
+              <!-- tries left -->
+              <div id="triesLeft" data-l10-id="inputCodeRetriesLeft">3 tries left</div>
 
               <!-- sim pin input field -->
               <div id="pinArea" hidden>
                 <div data-l10n-id="simPin">SIM PIN</div>
                 <div class="input-wrapper">
-                  <input name="simpin" type="number" size="8" maxlength="8" />
-                  <input name="simpinVis" type="text" size="8" maxlength="8" />
+                  <input name="simpin" type="password" x-inputmode="digit" size="8" maxlength="8" />
                 </div>
               </div>
               <!-- sim puk input field -->
               <div id="pukArea" hidden>
                 <div data-l10n-id="pukCode">PUK Code</div>
                 <div class="input-wrapper">
-                  <input name="simpuk" type="number" size="8" maxlength="8" />
-                  <input name="simpukVis" type="text" size="8" maxlength="8" />
+                  <input name="simpuk" type="password" x-inputmode="digit" size="8" maxlength="8" />
+                </div>
+              </div>
+              <!-- sim nck/cck/spck input field -->
+              <div id="xckArea" hidden>
+                <div name="xckDesc" data-l10n-id="nckCode">NCK Code</div>
+                <div class="input-wrapper">
+                  <input name="xckpin" type="number" size="16" maxlength="16" />
+                  <input name="xckpinVis" type="text" size="16" maxlength="16" />
                 </div>
               </div>
               <!-- new sim pin input field -->
@@ -376,16 +465,16 @@
                   Create PIN (must contain 4 to 8 digits)
                 </div>
                 <div class="input-wrapper">
-                  <input name="newSimpin" type="number" size="8" maxlength="8" />
-                  <input name="newSimpinVis" type="text" size="8" maxlength="8" />
+                  <input name="newSimpin" type="password" x-inputmode="digit" size="8" maxlength="8" />
                 </div>
               </div>
               <!-- confirm new sim pin input field -->
               <div id="confirmPinArea" hidden>
-                <div>Confirm New PIN</div>
+                <div data-l10n-id="confirmNewSimPinMsg">
+                  Confirm New PIN
+                </div>
                 <div class="input-wrapper">
-                  <input name="confirmNewSimpin" type="number" size="8" maxlength="8" />
-                  <input name="confirmNewSimpinVis" type="text" size="8" maxlength="8" />
+                  <input name="confirmNewSimpin" type="password" x-inputmode="digit" size="8" maxlength="8" />
                 </div>
               </div>
             </div>
@@ -487,7 +576,7 @@
         </div>
 
         <div id="modal-dialog">
-          <div id="modal-dialog-alert" role="dialog">
+          <div id="modal-dialog-alert" role="dialog" tabindex="-1">
             <div class="modal-dialog-message-container inner">
               <h3 id="modal-dialog-alert-title"></h3>
               <p>
@@ -499,7 +588,7 @@
             </menu>
           </div>
 
-          <div id="modal-dialog-confirm" role="dialog">
+          <div id="modal-dialog-confirm" role="dialog" tabindex="-1">
             <div class="modal-dialog-message-container inner">
               <h3 id="modal-dialog-confirm-title"></h3>
               <p>
@@ -512,7 +601,7 @@
             </menu>
           </div>
 
-          <div id="modal-dialog-prompt" role="dialog">
+          <div id="modal-dialog-prompt" role="dialog" tabindex="-1">
             <div class="modal-dialog-message-container inner">
               <h3 id="modal-dialog-prompt-title"></h3>
               <p>
@@ -526,7 +615,7 @@
             </menu>
           </div>
 
-          <div id="modal-dialog-select-one" role="dialog">
+          <div id="modal-dialog-select-one" role="dialog" tabindex="-1">
             <div class="modal-dialog-message-container inner">
               <h3 id="modal-dialog-select-one-title"></h3>
               <ul id="modal-dialog-select-one-menu"></ul>
@@ -542,7 +631,7 @@
       <!-- value selector -->
       <div id="value-selector" hidden data-z-index-level="value-selector">
         <!-- popup of options for select element -->
-        <form id="select-option-popup" role="dialog">
+        <form id="select-option-popup" role="dialog" data-type="value-selector">
           <section id="value-selector-container">
             <h1 data-l10n-id="choose-option">Choose your option</h1>
             <ol role="listbox">
@@ -555,24 +644,21 @@
 
         <!-- Time Picker -->
         <div id="time-picker-popup" hidden>
-          <div class="table-wrapper">
-            <div class="table-cell">
-              <div id="picker-bar">
-                <h3 data-l10n-id="select-time">Select time</h3>
-                <div id="picker-container">
-                  <div id="value-indicator-bottom"></div>
-                  <div id="picker-bar-background"></div>
-                  <div id="left-picker-separator"></div>
-                  <div id="value-indicator-wrapper">
-                    <div id="value-indicator-hover-time">:</div>
-                    <div id="value-indicator-hover"></div>
-                  </div>
-                  <div id="value-picker-hours" class="animation-on"></div>
-                  <div id="value-picker-minutes" class="animation-on"></div>
-                  <div id="right-picker-separator"></div>
-                  <div id="value-picker-hour24-state" class="animation-on"></div>
-                  <div id="picker-bar-gradient"></div>
-                </div>
+          <h3 data-l10n-id="select-time">Select time</h3>
+          <div id="time-picker">
+            <div class="picker-container">
+              <div class="picker-bar-background"></div>
+              <div class="value-picker-hours-wrapper">
+                <div class="value-picker-hours" class="animation-on"></div>
+              </div>
+              <div class="value-picker-minutes-wrapper">
+                <div class="value-picker-minutes" class="animation-on"></div>
+              </div>
+              <div class="value-picker-hour24-wrapper">
+                <div class="value-picker-hour24-state" class="animation-on"></div>
+              </div>
+              <div class="value-indicator">
+                <div class="value-indicator-colon">:</div>
               </div>
             </div>
           </div>
@@ -584,33 +670,23 @@
 
         <!-- Spin Date Picker -->
         <div id="spin-date-picker-popup" hidden>
-          <div id="spin-date-picker" class="table-wrapper">
-            <div class="table-cell">
-              <div class="picker-bar">
-                <h3 data-l10n-id="select-day">Select day</h3>
-                <div class="picker-container">
-                  <div class="value-indicator-bottom"></div>
-                  <div class="picker-bar-background"></div>
-                  <div class="left-picker-separator"></div>
-                  <div class="right-picker-separator"></div>
-                  <div class="value-indicator-wrapper">
-                    <div class="value-indicator-hover"></div>
-                  </div>
-                  <div class="value-picker-date-wrapper">
-                    <div class="value-picker-date animation-on"></div>
-                    <div class="value-picker-date animation-on"></div>
-                    <div class="value-picker-date animation-on"></div>
-                    <div class="value-picker-date animation-on"></div>
-                  </div>
-                  <div class="value-picker-month-wrapper">
-                    <div class="value-picker-month" class="animation-on"></div>
-                  </div>
-                  <div class="value-picker-year-wrapper">
-                    <div class="value-picker-year" class="animation-on"></div>
-                  </div>
-                  <div class="picker-bar-gradient"></div>
-                </div>
+          <h3 data-l10n-id="select-day">Select day</h3>
+          <div id="spin-date-picker">
+            <div class="picker-container">
+              <div class="picker-bar-background"></div>
+              <div class="value-picker-date-wrapper">
+                <div class="value-picker-date animation-on"></div>
+                <div class="value-picker-date animation-on"></div>
+                <div class="value-picker-date animation-on"></div>
+                <div class="value-picker-date animation-on"></div>
               </div>
+              <div class="value-picker-month-wrapper">
+                <div class="value-picker-month" class="animation-on"></div>
+              </div>
+              <div class="value-picker-year-wrapper">
+                <div class="value-picker-year" class="animation-on"></div>
+              </div>
+              <div class="value-indicator"></div>
             </div>
           </div>
           <menu id="spin-date-picker-buttons" data-items="2">
@@ -644,19 +720,15 @@
             data-z-index-level="app-install-dialog">
         <section>
           <h1 id="app-install-message"></h1>
-          <table>
-            <tr>
-              <th data-l10n-id="size">Size</th>
-              <td id="app-install-size"></td>
-            </tr>
-            <tr>
-              <th data-l10n-id="author">Author</th>
-              <td>
-                <span id="app-install-author-name"></span>
-                <br /><span id="app-install-author-url"></span>
-              </td>
-            </tr>
-          </table>
+          <dl>
+            <dt data-l10n-id="size">Size</dt>
+              <dd id="app-install-size"></dd>
+            <dt data-l10n-id="author">Author</dt>
+              <dd>
+                <span id="app-install-author-name"></span><br />
+                <span id="app-install-author-url"></span>
+              </dd>
+          </dl>
           <menu>
             <button id="app-install-cancel-button" data-l10n-id="cancel">Cancel</button>
             <button id="app-install-install-button" class="recommend" data-l10n-id="install">Install</button>
@@ -698,20 +770,42 @@
       </form>
 
       <form id="updates-download-dialog" data-type="confirm" role="dialog"
-            data-z-index-level="updates-download-dialog">
+            data-z-index-level="updates-download-dialog" data-nowifi="false"
+            data-data-connection-inline-warning="false">
         <section>
           <h1>
             Updates
           </h1>
           <ul>
           </ul>
-          <menu>
-            <button id="updates-later-button" type="reset"
-                    data-l10n-id="later">Later</button>
-            <button id="updates-download-button" type="submit"
-              data-l10n-id="download">Download</button>
-          </menu>
         </section>
+        <p id="updates-data-connection-warning" data-l10n-id="downloadDataConnectionWarning">
+          Updates are downloaded via data connection when Wi-Fi is not available. Additional data charges may apply.
+        </p>
+        <p id="updates-offline-warning" data-l10n-id="downloadOfflineWarning">
+          Connection unavailable. Connect to a network to download updates.
+        </p>
+        <menu>
+          <button id="updates-later-button" type="reset"
+                  data-l10n-id="later">Later</button>
+          <button id="updates-download-button" type="submit"
+            data-l10n-id="download">Download</button>
+        </menu>
+      </form>
+
+      <form id="updates-viaDataConnection-dialog" data-type="confirm" role="dialog" data-z-index-level="updates-viaDataConnection-dialog">
+        <section>
+          <h1 data-l10n-id="downloadUpdatesViaDataConnection">
+            Download updates via data connection?
+          </h1>
+          <p data-l10n-id="downloadUpdatesViaDataConnectionMessage">
+            Updates are downloaded via data connection when Wi-Fi is not available. When using data connection, phone calls may be blocked and additional charges may also apply.
+          </p>
+        </section>
+        <menu>
+          <button id="updates-viaDataConnection-notnow-button" type="reset" data-l10n-id="notNow">Not Now</button>
+          <button id="updates-viaDataConnection-download-button" type="submit" data-l10n-id="download">Download</button>
+        </menu>
       </form>
 
       <div id="lockscreen-camera" data-z-index-level="lockscreen-camera"></div>
@@ -747,7 +841,6 @@
           </div>
 
           <div id="lockscreen-panel-passcode" class="lockscreen-panel">
-            <h2 id="lockscreen-passcode-status" data-l10n-id="enter-security-code">Enter Security&nbsp;Code</h2>
             <p id="lockscreen-passcode-code"><span></span><span></span><span></span><span></span></p>
             <div id="lockscreen-passcode-pad">
               <a role="button" href="#" data-key="1">1<span>.<span></a>
@@ -759,9 +852,9 @@
               <a role="button" href="#" data-key="7">7<span>PQRS<span></a>
               <a role="button" href="#" data-key="8">8<span>TUV<span></a>
               <a role="button" href="#" data-key="9">9<span>WXYZ<span></a>
-              <a role="button" href="#" data-key="e" data-l10n-id="emergency-call-button" class="lockscreen-passcode-pad-func last-row">Emergency Call</a>
+              <a role="button" href="#" data-key="e" class="lockscreen-passcode-pad-func last-row"><span data-l10n-id="emergency-call-button">Emergency Call</span></a>
               <a role="button" href="#" data-key="0" class="last-row">0</a>
-              <a role="button" href="#" data-key="c" data-l10n-id="cancel" class="lockscreen-passcode-pad-func last-row">Cancel</a>
+              <a role="button" href="#" data-key="c" class="lockscreen-passcode-pad-func last-row"><span data-l10n-id="cancel">Cancel</span></a>
               <a role="button" href="#" data-key="b" class="last-row">⌫</a>
             </div>
           </div>
@@ -820,30 +913,31 @@
       <div id="system-overlay" data-z-index-level="system-overlay">
         <div id="battery">
           <span class="icon-battery"></span>
-          <span class="battery-notification empty" data-l10n-id="battery-almost-empty">Battery almost empty</span>
-          <span class="battery-notification small" data-l10n-id="battery-low">Battery low</span>
-          <span class="battery-notification full" data-l10n-id="battery-full">Battery 100% charged</span>
+          <span class="battery-notification" data-l10n-id="battery-almost-empty">Battery almost empty</span>
         </div>
 
         <div id="volume" class="vibration">
           <span class="vibration"></span>
           <span class="mute-state"></span>
-          <div class="active"></div>
-          <div class="active"></div>
-          <div class="active"></div>
-          <div class="active"></div>
-          <div class="active"></div>
-          <div></div>
-          <div></div>
-          <div></div>
-          <div></div>
-          <div></div>
-          <div></div>
-          <div></div>
-          <div></div>
-          <div></div>
-          <div></div>
           <span class="volume"></span>
+          <section>
+            <div class="active"></div>
+            <div class="active"></div>
+            <div class="active"></div>
+            <div class="active"></div>
+            <div class="active"></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+            <div></div>
+          </section>
         </div>
       </div>
 

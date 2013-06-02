@@ -1,13 +1,11 @@
-requireApp('calendar/test/unit/helper.js', function() {
-  requireSupport('fake_page.js');
-  requireSupport('mock_view.js');
+requireSupport('fake_page.js');
+requireSupport('mock_view.js');
 
-  requireLib('provider/abstract.js');
-  requireLib('worker/manager.js');
-  requireLib('controllers/service.js');
-  requireLib('router.js');
-  requireLib('app.js');
-});
+requireLib('provider/abstract.js');
+requireLib('worker/manager.js');
+requireLib('controllers/service.js');
+requireLib('router.js');
+requireLib('app.js');
 
 suite('app', function() {
 
@@ -15,9 +13,22 @@ suite('app', function() {
   var subject;
   var router;
   var page;
+  var Pending;
 
   suiteSetup(function() {
     Calendar.ns('Views').Mock = Calendar.Test.MockView;
+    Pending = function(pending=false) {
+      this.pending = pending;
+
+      Calendar.Responder.call(this);
+    };
+
+    Pending.prototype = {
+      __proto__: Calendar.Responder.prototype,
+
+      startEvent: 'start',
+      completeEvent: 'complete'
+    };
   });
 
   suiteTeardown(function() {
@@ -30,6 +41,171 @@ suite('app', function() {
 
     subject = testSupport.calendar.app();
     router = subject.router;
+  });
+
+  suite('date localization', function() {
+    var expected;
+    var fmt;
+    var id = 0;
+    var realL10n;
+    var l10nMap;
+
+    suiteSetup(function() {
+      realL10n = navigator.mozL10n.get;
+      navigator.mozL10n.get = function(name) {
+        return l10nMap[name] || '';
+      };
+    });
+
+    suiteTeardown(function() {
+      navigator.mozL10n.get = realL10n;
+    });
+
+    function dateElement(date, format) {
+      var el = document.createElement('span');
+      el.dataset.l10nDateFormat = format;
+      el.dataset.date = date.toString();
+      el.textContent = 'you-faiL!';
+
+      document.body.appendChild(el);
+
+      return el;
+    }
+
+    function addExpect(date, formatName, formatValue) {
+      var elId = 'dateId-' + (++id);
+      l10nMap[formatName] = formatValue;
+      dateElement(date, formatName).id = elId;
+
+      expected.push(
+        [elId, fmt.localeFormat(date, formatValue)]
+      );
+    }
+
+    setup(function() {
+      l10nMap = {};
+      fmt = Calendar.App.dateFormat = navigator.mozL10n.DateTimeFormat();
+      expected = [];
+
+      var formatXDate = new Date(2012, 1, 1);
+      var formatCDate = new Date(2012, 1, 1, 7, 2, 9);
+
+      addExpect(formatCDate, 'myl10nKey', '%x');
+      addExpect(formatCDate, 'otherl10nKey', '%c');
+
+      subject.observeDateLocalization();
+      window.dispatchEvent(new Event('localized'));
+    });
+
+    test('updates elements with data-l10n-date-format', function() {
+      expected.forEach(function(item) {
+        var element = document.getElementById(item[0]);
+        var expectedText = item[1];
+
+        assert.equal(
+          element.textContent,
+          expectedText,
+          'should relocalize given'
+        );
+      });
+    });
+  });
+
+  suite('PendingManager', function() {
+    var subject;
+
+    setup(function() {
+      subject = new Calendar.App.PendingManager();
+    });
+
+    suite('life-cycle', function() {
+      test('without pending', function() {
+        var one = new Pending();
+        subject.register(one);
+        assert.isFalse(subject.isPending());
+      });
+
+      test('with pending', function() {
+        var two = new Pending(true);
+        subject.register(two);
+        assert.isTrue(subject.isPending());
+      });
+
+      test('add with pending then remove', function() {
+        var two = new Pending(true);
+        subject.register(two);
+        subject.unregister(two);
+        assert.isFalse(subject.isPending());
+      });
+    });
+
+    suite('event life-cycle', function() {
+      var one;
+      var two;
+
+      setup(function() {
+        one = new Pending();
+        two = new Pending();
+      });
+
+      test('register while pending', function() {
+        one.pending = true;
+        subject.register(one);
+        assert.equal(subject.pending, 1);
+      });
+
+      test('register while not pending', function() {
+        subject.register(one);
+        assert.equal(subject.pending, 0);
+      });
+
+      test('emit start', function() {
+        subject.register(one);
+        one.emit('start');
+        assert.equal(subject.pending, 1);
+      });
+
+      test('emit complete', function() {
+        one.pending = true;
+        subject.register(one);
+        one.emit('complete');
+
+        assert.equal(subject.pending, 0);
+      });
+
+      test('wait for onpending', function(done) {
+
+        subject.onpending = function() {
+          subject.oncomplete = function() {
+            done();
+          };
+          one.emit('complete');
+        };
+
+        one.pending = true;
+        subject.register(one);
+      });
+
+      test('multiple events', function(done) {
+        subject.register(one);
+        subject.register(two);
+
+        subject.onpending = function() {
+          subject.oncomplete = function() {
+            done();
+          };
+
+          Calendar.nextTick(function() {
+            one.emit('complete');
+            two.emit('complete');
+          });
+        };
+
+        one.emit('start');
+        two.emit('start');
+      });
+
+    });
   });
 
   test('initialization', function() {
@@ -49,7 +225,7 @@ suite('app', function() {
       subject._mozTimeRefreshTimeout = 1;
       subject.forceRestart = function() {
         calledWith++;
-      }
+      };
     });
 
     teardown(function() {
@@ -97,6 +273,28 @@ suite('app', function() {
     assert.instanceOf(subject.router, Calendar.Router);
   });
 
+  test('pending objects', function() {
+    var object = new Pending(true);
+
+    subject.observePendingObject(object);
+
+    assert.ok(
+      document.body.classList.contains(
+        subject.pendingClass
+      ),
+      'adds pending class'
+    );
+
+    object.emit('complete');
+
+    assert.ok(
+      !document.body.classList.contains(
+        subject.pendingClass
+      ),
+      'removes pendign class'
+    );
+  });
+
   suite('#forceRestart', function() {
     var realLocation = window.location;
 
@@ -139,6 +337,13 @@ suite('app', function() {
     });
   });
 
+/*
+// These tests are currently failing and have been temporarily disabled as per
+// Bug 838993. They should be fixed and re-enabled as soon as possible as per
+// Bug 840489.
+// Please also note: the outcome of this test suite is non-deterministic.
+// Failures occur inconsistently, so potential fixes should be thoroughly
+// vetted.
   suite('#go', function() {
     var calledWith;
 
@@ -152,6 +357,7 @@ suite('app', function() {
     });
 
   });
+*/
 
   test('#view', function() {
     subject.view('Mock', function(first) {
@@ -185,7 +391,9 @@ suite('app', function() {
 
     assert.equal(route.length, 5);
     assert.equal(route[0], '/foo');
-    assert.equal(route[4], subject.router._lastState, 'should add lastState fn');
+    assert.equal(route[4], subject.router._lastState,
+      'should add lastState fn'
+    );
   });
 
   suite('#route', function() {
@@ -202,7 +410,9 @@ suite('app', function() {
       assert.instanceOf(route[1], Function, 'should add setPath');
       assert.instanceOf(route[2], Function, 'should add loadAllViews');
       assert.instanceOf(route[3], Function, 'should add handleView');
-      assert.equal(route[4], subject.router._lastState, 'should add lastState fn');
+      assert.equal(route[4], subject.router._lastState,
+        'should add lastState fn'
+      );
     });
 
     test('twoRoutes', function() {
@@ -216,8 +426,68 @@ suite('app', function() {
       assert.instanceOf(route[1], Function, 'should add setPath');
       assert.instanceOf(route[2], Function, 'should add loadAllViews');
       assert.instanceOf(route[3], Function, 'should add handleView');
-      assert.equal(route[4], subject.router._lastState, 'should add lastState fn');
+      assert.equal(route[4], subject.router._lastState,
+        'should add lastState fn'
+      );
     });
   });
 
+  suite('Delayed DOM Loading', function() {
+
+    var container;
+
+    suiteSetup(function() {
+      container = document.createElement('div');
+      container.innerHTML = '<div class="delay"><!-- ' +
+          '<div class="lazynode first">i love</div>' +
+          '<div class="lazynode second">bacon</div>' +
+        ' --></div>';
+      document.body.appendChild(container);
+    });
+
+    suiteTeardown(function() {
+      container.parentNode.removeChild(container);
+    });
+
+    test('make sure lazy nodes load', function() {
+      assert.equal(
+        document.querySelectorAll('.delay').length,
+        1,
+        'we have a single delayed container'
+      );
+
+      assert.equal(
+        document.querySelectorAll('.lazynode').length,
+        0,
+        'we do not have delayed nodes yet'
+      );
+
+      // Load the delayed nodes
+      subject.loadDOM();
+
+      assert.equal(
+        document.querySelectorAll('.delay').length,
+        0,
+        'delayed containers are removed'
+      );
+
+      assert.equal(
+        document.querySelectorAll('.lazynode').length,
+        2,
+        'delayed nodes are loaded'
+      );
+
+      assert.equal(
+        document.querySelector('.lazynode').parentNode,
+        container,
+        'the node is inserted into the correct parent'
+      );
+
+      var nextEl = document.querySelector('.first').nextElementSibling;
+      assert.ok(
+        nextEl.classList.contains('second'),
+        'node order is preserved'
+      );
+    });
+  });
 });
